@@ -204,6 +204,7 @@ RANK_LEVELS = [
 PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人與單位", "管理後台", "系統登入"]
 COACH_PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人與單位", "系統登入"]
 ADMIN_PAGES = PAGES
+ADMIN_ONLY_PAGES = {"管理後台"}
 
 
 def parse_dateish(value: str | None) -> date | None:
@@ -1031,6 +1032,20 @@ def is_admin() -> bool:
 
 def visible_pages() -> list[str]:
     return ADMIN_PAGES if is_admin() else COACH_PAGES
+
+
+def can_access_page(page: str) -> bool:
+    return page not in ADMIN_ONLY_PAGES or is_admin()
+
+
+def enforce_page_access(page: str) -> str:
+    if can_access_page(page):
+        return page
+
+    st.session_state["page"] = "賽事列表"
+    st.session_state.pop("pending_page", None)
+    st.warning("管理後台僅限管理員使用，已為你切回賽事列表。")
+    return "賽事列表"
 
 
 def ensure_user_account(account_email: str, role: str = "coach") -> None:
@@ -2368,6 +2383,7 @@ def main() -> None:
     inject_styles()
     apply_pending_page_change()
     page, status_filter = render_sidebar()
+    page = enforce_page_access(page)
     df = db_to_dataframe(current_account(), include_all=is_admin())
     events = filter_events(status_filter)
 
