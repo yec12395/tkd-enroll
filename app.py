@@ -1848,6 +1848,67 @@ def render_rules(events: list[dict]) -> None:
         st.caption("請先完成個資告知與安全提醒。")
 
 
+def reset_registration_form_state(event_name: str, default_unit_name: str) -> None:
+    st.session_state[f"athlete-unit::{event_name}"] = default_unit_name
+    st.session_state[f"athlete-unit-last::{event_name}"] = default_unit_name
+    st.session_state[f"registration-items::{event_name}"] = []
+
+    for key in [
+        f"athlete-name::{event_name}",
+        f"athlete-gender::{event_name}",
+        f"athlete-birth::{event_name}-date",
+        f"item-category::{event_name}",
+        f"item-group::{event_name}",
+        f"item-rank::{event_name}",
+        f"last-item-id::{event_name}",
+        f"last-group-id::{event_name}",
+        f"item-note::{event_name}",
+        f"registration-agreement::{event_name}",
+    ]:
+        st.session_state.pop(key, None)
+
+
+def registered_athletes_dataframe(account_email: str, event_name: str) -> pd.DataFrame:
+    db = SessionLocal()
+    try:
+        registrations = (
+            db.query(Registration)
+            .filter(
+                Registration.account_email == account_email,
+                Registration.event_name == event_name,
+            )
+            .order_by(Registration.id.desc())
+            .all()
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "選手姓名": item.athlete_name,
+                    "單位": item.team_name,
+                    "性別": item.gender,
+                    "出生年月日": getattr(item, "birth_date", "") or "",
+                    "項目": item.category,
+                    "組別": getattr(item, "group_name", "") or item.level,
+                    "級別": getattr(item, "rank_level", "") or "",
+                    "金額": getattr(item, "item_amount", 0) or 0,
+                    "備註": getattr(item, "note", "") or "",
+                }
+                for item in registrations
+            ]
+        )
+    finally:
+        db.close()
+
+
+def render_registered_athletes(account_email: str, event_name: str) -> None:
+    st.markdown("<div class='section-title'>已報名選手</div>", unsafe_allow_html=True)
+    registered_df = registered_athletes_dataframe(account_email, event_name)
+    if registered_df.empty:
+        st.info("此賽事目前尚未送出報名選手。")
+        return
+    st.dataframe(registered_df, use_container_width=True, hide_index=True)
+
+
 def render_registration_form() -> None:
     st.markdown("<div class='section-title'>賽事報名表</div>", unsafe_allow_html=True)
 
@@ -1864,6 +1925,8 @@ def render_registration_form() -> None:
         return
 
     event_name = selected_event["name"]
+    reset_key = f"registration-reset::{event_name}"
+    success_key = f"registration-success::{event_name}"
     if selected_event["status"] == "報名已截止":
         st.error("此賽事已截止報名，請選擇其他前台賽事。")
         return
@@ -1897,6 +1960,11 @@ def render_registration_form() -> None:
 
     unit_options = {unit.unit_name: unit for unit in units}
     event_date_display = format_event_date_range(selected_event.get("date_raw") or selected_event.get("date"))
+    unit_names = list(unit_options.keys())
+    if st.session_state.get("registration_unit_name") not in unit_names:
+        st.session_state["registration_unit_name"] = unit_names[0]
+    if st.session_state.pop(reset_key, False):
+        reset_registration_form_state(event_name, st.session_state["registration_unit_name"])
 
     st.markdown(
         f"""
@@ -1908,6 +1976,9 @@ def render_registration_form() -> None:
         """,
         unsafe_allow_html=True,
     )
+    success_message = st.session_state.pop(success_key, None)
+    if success_message:
+        st.success(success_message)
 
     if st.button(
         "編輯單位資料",
@@ -1920,9 +1991,6 @@ def render_registration_form() -> None:
     st.subheader("1. 單位")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        unit_names = list(unit_options.keys())
-        if st.session_state.get("registration_unit_name") not in unit_names:
-            st.session_state["registration_unit_name"] = unit_names[0]
         selected_unit_name = st.selectbox("參賽單位", unit_names, key="registration_unit_name")
         selected_unit = unit_options[selected_unit_name]
         unit_staff = get_staff_members(account, selected_unit.id)
@@ -2035,7 +2103,10 @@ def render_registration_form() -> None:
     else:
         st.info("尚未新增參賽項目。請先新增至少一個項目。")
 
-    agreement = st.checkbox("我已確認資料正確，並同意主辦單位依賽事需要處理報名資料")
+    agreement = st.checkbox(
+        "我已確認資料正確，並同意主辦單位依賽事需要處理報名資料",
+        key=f"registration-agreement::{event_name}",
+    )
     if st.button("儲存並提交本筆資料", key=f"submit-registration::{event_name}", use_container_width=True):
         missing = []
         if not athlete_name.strip():
@@ -2076,10 +2147,13 @@ def render_registration_form() -> None:
                     )
                 )
             db.commit()
-            st.session_state[items_key] = []
-            st.success("報名成功")
+            st.session_state[reset_key] = True
+            st.session_state[success_key] = f"{athlete_name.strip()} 報名成功，表單已清空。"
         finally:
             db.close()
+        st.rerun()
+
+    render_registered_athletes(account, event_name)
 
 
 def render_my_registrations(df: pd.DataFrame) -> None:
