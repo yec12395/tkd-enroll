@@ -202,11 +202,13 @@ RANK_LEVELS = [
     "公開組",
 ]
 
-PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人與單位", "管理後台", "系統登入"]
-COACH_PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人與單位", "系統登入"]
+UNIT_PAGE = "單位資料"
+PAGE_ALIASES = {"個人與單位": UNIT_PAGE}
+PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", UNIT_PAGE, "管理後台", "系統登入"]
+COACH_PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", UNIT_PAGE, "系統登入"]
 ADMIN_PAGES = PAGES
 ADMIN_ONLY_PAGES = {"管理後台"}
-PROFILE_SECTIONS = ["個人資料", "參賽單位", "隊職員名單"]
+PROFILE_SECTIONS = ["參賽單位", "隊職員名單", "聯絡人資料"]
 
 
 def parse_dateish(value: str | None) -> date | None:
@@ -539,7 +541,7 @@ def route_to_registration_or_unit_setup(event_name: str | None = None) -> None:
     if account and not get_team_units(account):
         st.session_state["profile_section"] = "參賽單位"
         st.session_state["unit_setup_after_registration"] = True
-        request_page_change("個人與單位")
+        request_page_change(UNIT_PAGE)
         return
 
     st.session_state.pop("unit_setup_after_registration", None)
@@ -552,11 +554,13 @@ def start_registration(event_name: str) -> None:
 
 
 def request_page_change(page: str) -> None:
+    page = PAGE_ALIASES.get(page, page)
     st.session_state["pending_page"] = page
 
 
 def apply_pending_page_change() -> None:
     page = st.session_state.pop("pending_page", None)
+    page = PAGE_ALIASES.get(page, page)
     if page in PAGES:
         st.session_state["page"] = page
 
@@ -566,7 +570,7 @@ def go_to_registration_page() -> None:
 
 
 def go_to_profile_page() -> None:
-    request_page_change("個人與單位")
+    request_page_change(UNIT_PAGE)
 
 
 def go_home() -> None:
@@ -1449,6 +1453,8 @@ def render_sidebar() -> tuple[str, str]:
             unsafe_allow_html=True,
         )
         pages = visible_pages()
+        if st.session_state.get("page") in PAGE_ALIASES:
+            st.session_state["page"] = PAGE_ALIASES[st.session_state["page"]]
         if "page" not in st.session_state or st.session_state["page"] not in pages:
             st.session_state["page"] = "賽事列表"
         st.button(
@@ -1468,7 +1474,7 @@ def render_sidebar() -> tuple[str, str]:
             role_label = "管理員" if is_admin() else "教練"
             st.success(f"已登入：{st.session_state['account']}（{role_label}）")
             if not get_user_profile(st.session_state["account"]):
-                st.warning("請先建立個人資料")
+                st.warning("請先建立聯絡人資料")
         else:
             st.warning("尚未登入")
         st.divider()
@@ -1528,24 +1534,25 @@ def render_login_box(prefix: str = "login") -> None:
             if prefix in {"rules", "registration"} and st.session_state.get("selected_event_name"):
                 route_to_registration_or_unit_setup()
             else:
-                request_page_change("個人與單位")
+                request_page_change(UNIT_PAGE)
             st.rerun()
         st.warning("請輸入 Email。")
 
 
 def render_profile_form(account_email: str, prefix: str = "profile") -> bool:
     profile = get_user_profile(account_email)
+    st.caption(f"這筆聯絡人資料會綁定目前登入帳號：{account_email}")
     with st.form(f"{prefix}_form"):
-        name = st.text_input("姓名 *", value=profile.name if profile else "", key=f"{prefix}_name")
+        name = st.text_input("聯絡人姓名 *", value=profile.name if profile else "", key=f"{prefix}_name")
         phone = st.text_input("聯絡電話 *", value=profile.phone if profile else "", key=f"{prefix}_phone")
-        submitted = st.form_submit_button("儲存個人資料", use_container_width=True)
+        submitted = st.form_submit_button("儲存聯絡人資料", use_container_width=True)
 
     if submitted:
         if not name.strip() or not phone.strip():
-            st.error("請填寫姓名及聯絡電話。")
+            st.error("請填寫聯絡人姓名及聯絡電話。")
         else:
             save_user_profile(account_email, name.strip(), phone.strip())
-            st.success("個人資料已儲存。")
+            st.success("聯絡人資料已儲存。")
             st.rerun()
 
     return profile is not None
@@ -1593,10 +1600,14 @@ def render_staff_manager(account_email: str) -> None:
     unit_lookup = {unit.id: unit.unit_name for unit in units}
     unit_options = {unit.unit_name: unit.id for unit in units}
 
-    with st.form("staff_member_form", clear_on_submit=True):
-        unit_name = st.selectbox("所屬單位", list(unit_options.keys()))
+    selected_staff_unit = st.session_state.get("staff-member-unit")
+    if selected_staff_unit not in unit_options:
+        st.session_state["staff-member-unit"] = list(unit_options.keys())[0]
+
+    with st.form("staff_member_form"):
+        unit_name = st.selectbox("所屬單位", list(unit_options.keys()), key="staff-member-unit")
         role = st.selectbox("職稱", ["領隊", "教練", "管理"])
-        name = st.text_input("姓名 *")
+        name = st.text_input("姓名 *", key="staff-member-name")
         submitted = st.form_submit_button("新增隊職員", use_container_width=True)
 
     if submitted:
@@ -1634,10 +1645,10 @@ def render_staff_manager(account_email: str) -> None:
 
 
 def render_profile_and_unit_page() -> None:
-    st.markdown("<div class='section-title'>個人與單位資料</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>單位資料</div>", unsafe_allow_html=True)
     account = current_account()
     if not account:
-        st.info("請先登入後再建立個人與單位資料。")
+        st.info("請先登入後再建立單位資料。")
         render_login_box("profile_page")
         return
 
@@ -1646,7 +1657,7 @@ def render_profile_and_unit_page() -> None:
         st.info("開始報名前請先建立參賽單位；完成後按下方「開始報名」即可進入賽事報名表。")
 
     if st.session_state.get("profile_section") not in PROFILE_SECTIONS:
-        st.session_state["profile_section"] = "個人資料"
+        st.session_state["profile_section"] = "參賽單位"
     profile_section = st.radio(
         "資料類型",
         PROFILE_SECTIONS,
@@ -1654,12 +1665,12 @@ def render_profile_and_unit_page() -> None:
         horizontal=True,
     )
 
-    if profile_section == "個人資料":
-        render_profile_form(account, "profile_page")
-    elif profile_section == "參賽單位":
+    if profile_section == "參賽單位":
         render_unit_manager(account)
-    else:
+    elif profile_section == "隊職員名單":
         render_staff_manager(account)
+    else:
+        render_profile_form(account, "profile_page")
 
     st.divider()
     if st.button(
@@ -1850,7 +1861,7 @@ def render_registration_form() -> None:
     account = current_account()
     profile = get_user_profile(account)
     if not profile:
-        st.warning("登入後須先建立個人資料，填寫姓名與聯絡電話後才能報名。")
+        st.warning("登入後須先建立聯絡人資料，填寫聯絡人姓名與聯絡電話後才能報名。")
         render_profile_form(account, "registration_profile")
         return
 
@@ -1858,7 +1869,7 @@ def render_registration_form() -> None:
     if not units:
         st.session_state["profile_section"] = "參賽單位"
         st.session_state["unit_setup_after_registration"] = True
-        request_page_change("個人與單位")
+        request_page_change(UNIT_PAGE)
         st.warning("尚未建立參賽單位，已為你前往單位建立區。")
         st.rerun()
 
@@ -1876,7 +1887,7 @@ def render_registration_form() -> None:
     )
 
     if st.button(
-        "編輯個人與單位資料",
+        "編輯單位資料",
         key="registration-edit-profile",
         on_click=go_to_profile_page,
         use_container_width=True,
@@ -2514,7 +2525,7 @@ def render_login() -> None:
                 role = "admin" if admin_code.strip() == ADMIN_ACCESS_CODE else "coach"
                 ensure_user_account(account.strip(), role)
                 st.session_state["account"] = account.strip()
-                request_page_change("管理後台" if role == "admin" else "個人與單位")
+                request_page_change("管理後台" if role == "admin" else UNIT_PAGE)
                 st.success(f"已登入：{account.strip()}")
                 st.rerun()
             else:
@@ -2539,7 +2550,7 @@ def main() -> None:
         render_registration_form()
     elif page == "我的報名":
         render_my_registrations(df)
-    elif page == "個人與單位":
+    elif page == UNIT_PAGE:
         render_profile_and_unit_page()
     elif page == "管理後台":
         render_admin(df)
