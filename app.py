@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+from html import escape
 from io import BytesIO
 import os
 
@@ -955,6 +956,58 @@ def inject_styles() -> None:
             background: #ffffff;
             color: var(--ink);
             font-weight: 700;
+        }
+
+        .hierarchy-node {
+            min-height: 2.55rem;
+            display: flex;
+            align-items: center;
+            gap: .55rem;
+            padding: .55rem .85rem;
+            border: 1px solid var(--node-border);
+            border-left: 6px solid var(--node-accent);
+            border-radius: 8px;
+            background: var(--node-bg);
+            color: var(--node-fg);
+            box-shadow: 0 8px 18px rgba(22, 32, 42, .08);
+        }
+
+        .hierarchy-node strong,
+        .hierarchy-node span {
+            color: inherit;
+        }
+
+        .hierarchy-node strong {
+            font-weight: 900;
+        }
+
+        .hierarchy-node .hierarchy-kind {
+            font-size: .78rem;
+            font-weight: 900;
+            opacity: .78;
+        }
+
+        .hierarchy-node .hierarchy-caret {
+            font-weight: 900;
+            opacity: .9;
+        }
+
+        .hierarchy-node .hierarchy-meta {
+            margin-left: auto;
+            font-size: .86rem;
+            font-weight: 800;
+            opacity: .86;
+        }
+
+        .hierarchy-node-group {
+            border-left-width: 5px;
+            box-shadow: 0 6px 14px rgba(22, 32, 42, .05);
+        }
+
+        .hierarchy-node-level {
+            min-height: 2.35rem;
+            border-left-width: 4px;
+            box-shadow: none;
         }
 
         .hierarchy-empty {
@@ -2053,6 +2106,57 @@ def render_my_registrations(df: pd.DataFrame) -> None:
     )
 
 
+HIERARCHY_HUES = [354, 212, 168, 32, 276, 190, 112, 15, 238, 320]
+
+
+def hierarchy_colors(index: int) -> dict[str, str]:
+    hue = HIERARCHY_HUES[index % len(HIERARCHY_HUES)]
+    return {
+        "item_bg": f"hsl({hue}, 68%, 42%)",
+        "item_fg": "#ffffff",
+        "item_border": f"hsl({hue}, 68%, 34%)",
+        "item_accent": f"hsl({hue}, 82%, 58%)",
+        "group_bg": f"hsl({hue}, 72%, 91%)",
+        "group_fg": f"hsl({hue}, 48%, 24%)",
+        "group_border": f"hsl({hue}, 58%, 70%)",
+        "group_accent": f"hsl({hue}, 68%, 48%)",
+        "level_bg": f"hsl({hue}, 76%, 96%)",
+        "level_fg": f"hsl({hue}, 42%, 24%)",
+        "level_border": f"hsl({hue}, 52%, 80%)",
+        "level_accent": f"hsl({hue}, 62%, 56%)",
+    }
+
+
+def hierarchy_node_html(kind: str, name: str, level: str, colors: dict[str, str], icon: str = "", meta: str = "") -> str:
+    safe_icon = escape(icon)
+    safe_kind = escape(kind)
+    safe_name = escape(name)
+    safe_meta = escape(meta)
+    meta_html = f"<span class='hierarchy-meta'>{safe_meta}</span>" if meta else ""
+    return f"""
+    <div
+        class="hierarchy-node hierarchy-node-{level}"
+        style="--node-bg: {colors[f'{level}_bg']}; --node-fg: {colors[f'{level}_fg']}; --node-border: {colors[f'{level}_border']}; --node-accent: {colors[f'{level}_accent']};"
+    >
+        <span class="hierarchy-caret">{safe_icon}</span>
+        <span class="hierarchy-kind">{safe_kind}</span>
+        <strong>{safe_name}</strong>
+        {meta_html}
+    </div>
+    """
+
+
+def hierarchy_empty_html(message: str, level: str, colors: dict[str, str]) -> str:
+    return f"""
+    <div
+        class="hierarchy-empty"
+        style="border-color: {colors[f'{level}_border']}; background: {colors[f'{level}_bg']}; color: {colors[f'{level}_fg']};"
+    >
+        {escape(message)}
+    </div>
+    """
+
+
 def render_event_hierarchy_tree(event_name: str) -> None:
     items = get_event_items(event_name)
     if not items:
@@ -2065,13 +2169,18 @@ def render_event_hierarchy_tree(event_name: str) -> None:
     open_item_key = f"admin-open-item::{event_name}"
     open_group_key = f"admin-open-group::{event_name}"
 
-    for item in items:
+    for item_index, item in enumerate(items):
+        colors = hierarchy_colors(item_index)
         item_is_open = st.session_state.get(open_item_key) == item.id
         item_icon = "▼" if item_is_open else "▶"
-        item_col, delete_col = st.columns([5, 1])
+        item_label_col, item_toggle_col, delete_col = st.columns([4.1, 0.9, 1])
 
-        if item_col.button(
-            f"{item_icon} 項目：{item.name} / NT${item.amount or 0:,}",
+        item_label_col.markdown(
+            hierarchy_node_html("項目", item.name, "item", colors, item_icon, f"NT${item.amount or 0:,}"),
+            unsafe_allow_html=True,
+        )
+        if item_toggle_col.button(
+            "收合" if item_is_open else "展開",
             key=f"toggle-event-item-{item.id}",
             use_container_width=True,
         ):
@@ -2116,7 +2225,7 @@ def render_event_hierarchy_tree(event_name: str) -> None:
         if not groups:
             _, empty_group_col = st.columns([0.45, 5.55])
             empty_group_col.markdown(
-                "<div class='hierarchy-empty'>此項目尚未建立組別。</div>",
+                hierarchy_empty_html("此項目尚未建立組別。", "group", colors),
                 unsafe_allow_html=True,
             )
             st.divider()
@@ -2125,10 +2234,14 @@ def render_event_hierarchy_tree(event_name: str) -> None:
         for group in groups:
             group_is_open = st.session_state.get(open_group_key) == group.id
             group_icon = "▼" if group_is_open else "▶"
-            _, group_col, group_delete_col = st.columns([0.45, 4.55, 1])
+            _, group_label_col, group_toggle_col, group_delete_col = st.columns([0.45, 3.65, 0.9, 1])
 
-            if group_col.button(
-                f"{group_icon} 組別：{group.name}",
+            group_label_col.markdown(
+                hierarchy_node_html("組別", group.name, "group", colors, group_icon),
+                unsafe_allow_html=True,
+            )
+            if group_toggle_col.button(
+                "收合" if group_is_open else "展開",
                 key=f"toggle-event-group-{group.id}",
                 use_container_width=True,
             ):
@@ -2170,7 +2283,7 @@ def render_event_hierarchy_tree(event_name: str) -> None:
             if not levels:
                 _, empty_level_col = st.columns([0.9, 5.1])
                 empty_level_col.markdown(
-                    "<div class='hierarchy-empty'>此組別尚未建立級別。</div>",
+                    hierarchy_empty_html("此組別尚未建立級別。", "level", colors),
                     unsafe_allow_html=True,
                 )
                 continue
@@ -2178,7 +2291,7 @@ def render_event_hierarchy_tree(event_name: str) -> None:
             for level in levels:
                 _, level_col, level_delete_col = st.columns([0.9, 4.1, 1])
                 level_col.markdown(
-                    f"<div class='hierarchy-leaf'>級別：{level.name}</div>",
+                    hierarchy_node_html("級別", level.name, "level", colors),
                     unsafe_allow_html=True,
                 )
                 if level_delete_col.button(
