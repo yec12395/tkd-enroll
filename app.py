@@ -27,8 +27,10 @@ Base.metadata.create_all(bind=engine)
 ADMIN_ACCESS_CODE = "admin2026"
 
 
-# 請找到 app.py 的 ensure_registration_schema 函式並替換更新：
 def ensure_registration_schema() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
     required_columns = {
         "account_email": "VARCHAR",
         "leader_name": "VARCHAR",
@@ -38,9 +40,9 @@ def ensure_registration_schema() -> None:
         "rank_level": "VARCHAR",
         "item_amount": "INTEGER",
         "note": "VARCHAR",
-        "payment_status": "VARCHAR", # 自動補欄位
+        "payment_status": "VARCHAR",
         "pay_five_digits": "VARCHAR",
-        "pay_remark": "VARCHAR"
+        "pay_remark": "VARCHAR",
     }
     with engine.begin() as connection:
         existing_columns = {
@@ -58,42 +60,7 @@ def ensure_registration_schema() -> None:
 
 ensure_registration_schema()
 
-# 請找到 app.py 的 db_to_dataframe 函式並替換更新：
-def db_to_dataframe(account_email: str | None = None, include_all: bool = False) -> pd.DataFrame:
-    db = SessionLocal()
-    try:
-        query = db.query(Registration)
-        if account_email and not include_all:
-            query = query.filter(Registration.account_email == account_email)
-        registrations = query.order_by(Registration.id.desc()).all()
-        rows = [
-            {
-                "編號": item.id,
-                "帳號": getattr(item, "account_email", "") or "",
-                "賽事": item.event_name,
-                "選手姓名": item.athlete_name,
-                "報名單位": item.team_name,
-                "領隊": getattr(item, "leader_name", "") or "",
-                "教練": item.coach_name,
-                "管理": getattr(item, "manager_name", "") or "",
-                "性別": item.gender,
-                "出生年月日": getattr(item, "birth_date", "") or "",
-                "項目": item.category,
-                "組別": getattr(item, "group_name", "") or item.level,
-                "級別": getattr(item, "rank_level", "") or "",
-                "金額": getattr(item, "item_amount", 0) or 0,
-                "繳費狀態": getattr(item, "payment_status", "未繳費") or "未繳費",
-                "匯款後五碼": getattr(item, "pay_five_digits", "") or "",
-                "備註": getattr(item, "note", "") or "",
-                "電話": item.phone,
-            }
-            for item in registrations
-        ]
-        return pd.DataFrame(rows)
-    finally:
-        db.close()
 
-# 更新教練更新匯款資訊的後台邏輯
 def update_payment_info(account_email: str, event_name: str, five_digits: str, remark: str):
     db = SessionLocal()
     try:
@@ -125,6 +92,9 @@ def admin_confirm_payment(event_name: str, team_name: str):
 
 
 def ensure_user_profile_schema() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
     required_columns = {"role": "VARCHAR"}
     with engine.begin() as connection:
         existing_columns = {
@@ -142,6 +112,9 @@ ensure_user_profile_schema()
 
 
 def ensure_event_schema() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
     required_columns = {
         "registration_start": "VARCHAR",
         "pdf_url": "VARCHAR",
@@ -768,6 +741,8 @@ def db_to_dataframe(account_email: str | None = None, include_all: bool = False)
                 "組別": getattr(item, "group_name", "") or item.level,
                 "級別": getattr(item, "rank_level", "") or "",
                 "金額": getattr(item, "item_amount", 0) or 0,
+                "繳費狀態": getattr(item, "payment_status", "未繳費") or "未繳費",
+                "匯款後五碼": getattr(item, "pay_five_digits", "") or "",
                 "備註": getattr(item, "note", "") or "",
                 "電話": item.phone,
             }
@@ -1718,8 +1693,7 @@ def render_my_registrations(df: pd.DataFrame) -> None:
             if col2.button("刪除", key=f"delete-registration-{registration_id}", use_container_width=True):
                 delete_registration(registration_id, current_account(), is_admin())
                 st.rerun()
-    # 在 render_my_registrations 內新增
-    if not filtered.empty():
+    if not filtered.empty:
         st.markdown("### 💰 填寫匯款回報中心")
         unique_events = filtered["賽事"].unique()
         selected_pay_event = st.selectbox("選擇要回報的賽事", unique_events, key="pay_event_sel")
