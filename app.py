@@ -929,6 +929,27 @@ def inject_styles() -> None:
             box-shadow: 0 8px 22px rgba(22, 32, 42, .04);
         }
 
+        .hierarchy-leaf {
+            min-height: 2.55rem;
+            display: flex;
+            align-items: center;
+            padding: .45rem .8rem;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #ffffff;
+            color: var(--ink);
+            font-weight: 700;
+        }
+
+        .hierarchy-empty {
+            margin: .35rem 0 .7rem;
+            padding: .75rem .9rem;
+            border: 1px dashed #d7dce4;
+            border-radius: 8px;
+            background: #fafbfc;
+            color: var(--muted);
+        }
+
         hr {
             margin: 1.5rem 0;
             border-color: var(--line);
@@ -2028,13 +2049,15 @@ def render_event_hierarchy_tree(event_name: str) -> None:
         if st.session_state.get(open_item_key) != item.id:
             continue
 
-        with st.form(f"add_group_form::{item.id}", clear_on_submit=True):
-            group_name = st.text_input(
-                "新增組別",
-                placeholder="例如：國小低年級、10-11歲男",
-                key=f"new-group-name::{item.id}",
-            )
-            group_submitted = st.form_submit_button("新增到此項目", use_container_width=True)
+        _, group_form_col = st.columns([0.45, 5.55])
+        with group_form_col:
+            with st.form(f"add_group_form::{item.id}", clear_on_submit=True):
+                group_name = st.text_input(
+                    "新增組別",
+                    placeholder="例如：國小低年級、10-11歲男",
+                    key=f"new-group-name::{item.id}",
+                )
+                group_submitted = st.form_submit_button("新增到此項目", use_container_width=True)
         if group_submitted:
             if not group_name.strip():
                 st.error("請輸入組別名稱。")
@@ -2045,14 +2068,18 @@ def render_event_hierarchy_tree(event_name: str) -> None:
 
         groups = get_event_groups(item.id)
         if not groups:
-            st.info("此項目尚未建立組別。")
+            _, empty_group_col = st.columns([0.45, 5.55])
+            empty_group_col.markdown(
+                "<div class='hierarchy-empty'>此項目尚未建立組別。</div>",
+                unsafe_allow_html=True,
+            )
             st.divider()
             continue
 
         for group in groups:
             group_is_open = st.session_state.get(open_group_key) == group.id
             group_icon = "▼" if group_is_open else "▶"
-            group_col, group_delete_col = st.columns([5, 1])
+            _, group_col, group_delete_col = st.columns([0.45, 4.55, 1])
 
             if group_col.button(
                 f"{group_icon} 組別：{group.name}",
@@ -2076,13 +2103,15 @@ def render_event_hierarchy_tree(event_name: str) -> None:
             if st.session_state.get(open_group_key) != group.id:
                 continue
 
-            with st.form(f"add_level_form::{group.id}", clear_on_submit=True):
-                level_name = st.text_input(
-                    "新增級別",
-                    placeholder="例如：白帶、黑帶一段、-45kg",
-                    key=f"new-level-name::{group.id}",
-                )
-                level_submitted = st.form_submit_button("新增到此組別", use_container_width=True)
+            _, level_form_col = st.columns([0.9, 5.1])
+            with level_form_col:
+                with st.form(f"add_level_form::{group.id}", clear_on_submit=True):
+                    level_name = st.text_input(
+                        "新增級別",
+                        placeholder="例如：白帶、黑帶一段、-45kg",
+                        key=f"new-level-name::{group.id}",
+                    )
+                    level_submitted = st.form_submit_button("新增到此組別", use_container_width=True)
             if level_submitted:
                 if not level_name.strip():
                     st.error("請輸入級別名稱。")
@@ -2093,12 +2122,19 @@ def render_event_hierarchy_tree(event_name: str) -> None:
 
             levels = get_event_levels(group.id)
             if not levels:
-                st.info("此組別尚未建立級別。")
+                _, empty_level_col = st.columns([0.9, 5.1])
+                empty_level_col.markdown(
+                    "<div class='hierarchy-empty'>此組別尚未建立級別。</div>",
+                    unsafe_allow_html=True,
+                )
                 continue
 
             for level in levels:
-                level_col, level_delete_col = st.columns([5, 1])
-                level_col.write(f"級別：{level.name}")
+                _, level_col, level_delete_col = st.columns([0.9, 4.1, 1])
+                level_col.markdown(
+                    f"<div class='hierarchy-leaf'>級別：{level.name}</div>",
+                    unsafe_allow_html=True,
+                )
                 if level_delete_col.button(
                     "刪除級別",
                     key=f"delete-event-level-{level.id}",
