@@ -205,6 +205,7 @@ PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人
 COACH_PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", "個人與單位", "系統登入"]
 ADMIN_PAGES = PAGES
 ADMIN_ONLY_PAGES = {"管理後台"}
+PROFILE_SECTIONS = ["個人資料", "參賽單位", "隊職員名單"]
 
 
 def parse_dateish(value: str | None) -> date | None:
@@ -529,10 +530,24 @@ def open_event_detail(event_name: str) -> None:
     request_page_change("競賽規程")
 
 
-def start_registration(event_name: str) -> None:
-    st.session_state["selected_event_name"] = event_name
-    st.session_state[notice_key(event_name)] = True
+def route_to_registration_or_unit_setup(event_name: str | None = None) -> None:
+    if event_name:
+        st.session_state["selected_event_name"] = event_name
+
+    account = current_account()
+    if account and not get_team_units(account):
+        st.session_state["profile_section"] = "參賽單位"
+        st.session_state["unit_setup_after_registration"] = True
+        request_page_change("個人與單位")
+        return
+
+    st.session_state.pop("unit_setup_after_registration", None)
     request_page_change("線上報名")
+
+
+def start_registration(event_name: str) -> None:
+    st.session_state[notice_key(event_name)] = True
+    route_to_registration_or_unit_setup(event_name)
 
 
 def request_page_change(page: str) -> None:
@@ -546,7 +561,7 @@ def apply_pending_page_change() -> None:
 
 
 def go_to_registration_page() -> None:
-    request_page_change("線上報名")
+    route_to_registration_or_unit_setup()
 
 
 def go_to_profile_page() -> None:
@@ -1457,7 +1472,10 @@ def render_login_box(prefix: str = "login") -> None:
         if account.strip():
             ensure_user_account(account.strip(), "coach")
             st.session_state["account"] = account.strip()
-            request_page_change("個人與單位")
+            if prefix in {"rules", "registration"} and st.session_state.get("selected_event_name"):
+                route_to_registration_or_unit_setup()
+            else:
+                request_page_change("個人與單位")
             st.rerun()
         st.warning("請輸入 Email。")
 
@@ -1571,12 +1589,23 @@ def render_profile_and_unit_page() -> None:
         return
 
     st.caption(f"目前登入帳號：{account}")
-    tab1, tab2, tab3 = st.tabs(["個人資料", "參賽單位", "隊職員名單"])
-    with tab1:
+    if st.session_state.get("unit_setup_after_registration"):
+        st.info("開始報名前請先建立參賽單位；完成後按下方「開始報名」即可進入賽事報名表。")
+
+    if st.session_state.get("profile_section") not in PROFILE_SECTIONS:
+        st.session_state["profile_section"] = "個人資料"
+    profile_section = st.radio(
+        "資料類型",
+        PROFILE_SECTIONS,
+        key="profile_section",
+        horizontal=True,
+    )
+
+    if profile_section == "個人資料":
         render_profile_form(account, "profile_page")
-    with tab2:
+    elif profile_section == "參賽單位":
         render_unit_manager(account)
-    with tab3:
+    else:
         render_staff_manager(account)
 
     st.divider()
@@ -1774,9 +1803,11 @@ def render_registration_form() -> None:
 
     units = get_team_units(account)
     if not units:
-        st.warning("請先建立參賽單位，再進行選手報名。")
-        render_unit_manager(account)
-        return
+        st.session_state["profile_section"] = "參賽單位"
+        st.session_state["unit_setup_after_registration"] = True
+        request_page_change("個人與單位")
+        st.warning("尚未建立參賽單位，已為你前往單位建立區。")
+        st.rerun()
 
     unit_options = {unit.unit_name: unit for unit in units}
 
