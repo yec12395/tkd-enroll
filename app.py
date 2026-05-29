@@ -20,7 +20,11 @@ from models import (
 
 
 COMPONENT_DIR = os.path.join(os.path.dirname(__file__), "components", "zh_calendar")
-zh_calendar_component = components.declare_component("zh_calendar_component", path=COMPONENT_DIR)
+zh_calendar_component = (
+    components.declare_component("zh_calendar_component", path=COMPONENT_DIR)
+    if os.path.isdir(COMPONENT_DIR)
+    else None
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -243,6 +247,20 @@ def combine_date_time(selected_date: date, selected_time: time, second: int = 0)
 
 
 def render_datetime_picker(label: str, default_value: datetime, key_prefix: str) -> str:
+    if zh_calendar_component is None:
+        selected_date = st.date_input(
+            label,
+            value=default_value.date(),
+            key=f"{key_prefix}-date",
+        )
+        selected_time = st.time_input(
+            f"{label}時間",
+            value=time(default_value.hour, default_value.minute),
+            step=timedelta(minutes=1),
+            key=f"{key_prefix}-time",
+        )
+        return combine_date_time(selected_date, selected_time)
+
     value = default_value.strftime("%Y-%m-%d %H:%M")
     text_value = zh_calendar_component(
         mode="datetime",
@@ -260,6 +278,14 @@ def render_datetime_picker(label: str, default_value: datetime, key_prefix: str)
 
 def render_date_range_picker(label: str, default_range: tuple[date, date], key_prefix: str) -> list[str]:
     start, end = default_range
+    if zh_calendar_component is None:
+        value = st.date_input(
+            label,
+            value=(start, end),
+            key=f"{key_prefix}-range",
+        )
+        return dates_from_calendar_range(value)
+
     value = zh_calendar_component(
         mode="range",
         label=label,
@@ -278,6 +304,14 @@ def render_date_range_picker(label: str, default_range: tuple[date, date], key_p
 
 
 def render_date_picker(label: str, default_value: date, key_prefix: str) -> date:
+    if zh_calendar_component is None:
+        value = st.date_input(
+            label,
+            value=default_value,
+            key=f"{key_prefix}-date",
+        )
+        return value if isinstance(value, date) else default_value
+
     value = zh_calendar_component(
         mode="date",
         label=label,
