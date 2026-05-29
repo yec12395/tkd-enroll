@@ -552,6 +552,11 @@ def go_to_profile_page() -> None:
     request_page_change("個人與單位")
 
 
+def go_home() -> None:
+    st.session_state["page"] = "賽事列表"
+    st.session_state.pop("pending_page", None)
+
+
 def inject_styles() -> None:
     st.markdown(
         """
@@ -1342,6 +1347,13 @@ def render_sidebar() -> tuple[str, str]:
         pages = visible_pages()
         if "page" not in st.session_state or st.session_state["page"] not in pages:
             st.session_state["page"] = "賽事列表"
+        st.button(
+            "回到首頁（賽事列表）",
+            key="sidebar-home-button",
+            on_click=go_home,
+            use_container_width=True,
+        )
+        st.divider()
         page = st.radio(
             "功能選單",
             pages,
@@ -1654,7 +1666,7 @@ def render_rules(events: list[dict]) -> None:
 
     if privacy_read and not st.session_state.get(privacy_confirmed_key):
         render_privacy_notice_dialog(selected)
-    if safety_read and not st.session_state.get(safety_confirmed_key):
+    elif safety_read and not st.session_state.get(safety_confirmed_key):
         render_safety_notice_dialog(selected)
 
     notices_ready = (
