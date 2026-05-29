@@ -1764,21 +1764,122 @@ def render_event_hierarchy_tree(event_name: str) -> None:
         st.info("此賽事尚未建立項目。")
         return
 
-    st.markdown("### 目前階層")
+    st.markdown("### 項目 > 組別 > 級別")
+    st.caption("點開項目可設定該項目內的所有組別；點開單一組別可設定該組別內的所有級別。")
+
+    open_item_key = f"admin-open-item::{event_name}"
+    open_group_key = f"admin-open-group::{event_name}"
+
     for item in items:
-        with st.expander(f"項目：{item.name} / NT${item.amount or 0:,}", expanded=False):
-            groups = get_event_groups(item.id)
-            if not groups:
-                st.caption("此項目尚未建立組別。")
-                continue
-            for group in groups:
-                st.markdown(f"**組別：{group.name}**")
-                levels = get_event_levels(group.id)
-                if levels:
-                    for level in levels:
-                        st.markdown(f"<div style='padding-left: 1.5rem;'>級別：{level.name}</div>", unsafe_allow_html=True)
+        item_is_open = st.session_state.get(open_item_key) == item.id
+        item_icon = "▼" if item_is_open else "▶"
+        item_col, delete_col = st.columns([5, 1])
+
+        if item_col.button(
+            f"{item_icon} 項目：{item.name} / NT${item.amount or 0:,}",
+            key=f"toggle-event-item-{item.id}",
+            use_container_width=True,
+        ):
+            if item_is_open:
+                st.session_state.pop(open_item_key, None)
+                st.session_state.pop(open_group_key, None)
+            else:
+                st.session_state[open_item_key] = item.id
+                st.session_state.pop(open_group_key, None)
+
+        if delete_col.button(
+            "刪除項目",
+            key=f"delete-event-item-{item.id}",
+            use_container_width=True,
+        ):
+            delete_event_item(item.id)
+            st.session_state.pop(open_item_key, None)
+            st.session_state.pop(open_group_key, None)
+            st.rerun()
+
+        if st.session_state.get(open_item_key) != item.id:
+            continue
+
+        with st.form(f"add_group_form::{item.id}", clear_on_submit=True):
+            group_name = st.text_input(
+                "新增組別",
+                placeholder="例如：國小低年級、10-11歲男",
+                key=f"new-group-name::{item.id}",
+            )
+            group_submitted = st.form_submit_button("新增到此項目", use_container_width=True)
+        if group_submitted:
+            if not group_name.strip():
+                st.error("請輸入組別名稱。")
+            else:
+                add_event_group(item.id, group_name.strip())
+                st.success("組別已新增。")
+                st.rerun()
+
+        groups = get_event_groups(item.id)
+        if not groups:
+            st.info("此項目尚未建立組別。")
+            st.divider()
+            continue
+
+        for group in groups:
+            group_is_open = st.session_state.get(open_group_key) == group.id
+            group_icon = "▼" if group_is_open else "▶"
+            group_col, group_delete_col = st.columns([5, 1])
+
+            if group_col.button(
+                f"{group_icon} 組別：{group.name}",
+                key=f"toggle-event-group-{group.id}",
+                use_container_width=True,
+            ):
+                if group_is_open:
+                    st.session_state.pop(open_group_key, None)
                 else:
-                    st.caption("此組別尚未建立級別。")
+                    st.session_state[open_group_key] = group.id
+
+            if group_delete_col.button(
+                "刪除組別",
+                key=f"delete-event-group-{group.id}",
+                use_container_width=True,
+            ):
+                delete_event_group(group.id)
+                st.session_state.pop(open_group_key, None)
+                st.rerun()
+
+            if st.session_state.get(open_group_key) != group.id:
+                continue
+
+            with st.form(f"add_level_form::{group.id}", clear_on_submit=True):
+                level_name = st.text_input(
+                    "新增級別",
+                    placeholder="例如：白帶、黑帶一段、-45kg",
+                    key=f"new-level-name::{group.id}",
+                )
+                level_submitted = st.form_submit_button("新增到此組別", use_container_width=True)
+            if level_submitted:
+                if not level_name.strip():
+                    st.error("請輸入級別名稱。")
+                else:
+                    add_event_level(group.id, level_name.strip())
+                    st.success("級別已新增。")
+                    st.rerun()
+
+            levels = get_event_levels(group.id)
+            if not levels:
+                st.info("此組別尚未建立級別。")
+                continue
+
+            for level in levels:
+                level_col, level_delete_col = st.columns([5, 1])
+                level_col.write(f"級別：{level.name}")
+                if level_delete_col.button(
+                    "刪除級別",
+                    key=f"delete-event-level-{level.id}",
+                    use_container_width=True,
+                ):
+                    delete_event_level(level.id)
+                    st.rerun()
+
+        st.divider()
 
 
 def render_event_admin() -> None:
@@ -1899,73 +2000,6 @@ def render_event_admin() -> None:
         return
 
     render_event_hierarchy_tree(selected_event["name"])
-
-    for item in items:
-        col1, col2 = st.columns([5, 1])
-        col1.write(f"{item.name} / NT${item.amount or 0:,}")
-        if col2.button("刪除項目", key=f"delete-event-item-{item.id}", use_container_width=True):
-            delete_event_item(item.id)
-            st.rerun()
-
-    item_options = {f"{item.name} / NT${item.amount or 0:,}": item for item in items}
-    if st.session_state.get("admin-item-selector") not in item_options:
-        st.session_state["admin-item-selector"] = list(item_options.keys())[0]
-    selected_item_label = st.selectbox("選擇項目，接著只編輯此項目底下的組別", list(item_options.keys()), key="admin-item-selector")
-    selected_item = item_options[selected_item_label]
-
-    st.markdown(f"### 2. 組別（隸屬於「{selected_item.name}」）")
-    with st.form("add_group_form", clear_on_submit=True):
-        group_name = st.text_input("組別名稱 *", placeholder="例如：國小低年級、10-11歲男")
-        group_submitted = st.form_submit_button("新增組別", use_container_width=True)
-    if group_submitted:
-        if not group_name.strip():
-            st.error("請輸入組別名稱。")
-        else:
-            add_event_group(selected_item.id, group_name.strip())
-            st.success("組別已新增。")
-            st.rerun()
-
-    groups = get_event_groups(selected_item.id)
-    if not groups:
-        st.info("此項目尚未建立組別。")
-        return
-
-    for group in groups:
-        col1, col2 = st.columns([5, 1])
-        col1.write(group.name)
-        if col2.button("刪除組別", key=f"delete-event-group-{group.id}", use_container_width=True):
-            delete_event_group(group.id)
-            st.rerun()
-
-    group_options = {group.name: group for group in groups}
-    if st.session_state.get("admin-group-selector") not in group_options:
-        st.session_state["admin-group-selector"] = list(group_options.keys())[0]
-    selected_group_name = st.selectbox("選擇組別，接著只編輯此組別底下的級別", list(group_options.keys()), key="admin-group-selector")
-    selected_group = group_options[selected_group_name]
-
-    st.markdown(f"### 3. 級別（隸屬於「{selected_item.name} > {selected_group.name}」）")
-    with st.form("add_level_form", clear_on_submit=True):
-        level_name = st.text_input("級別名稱 *", placeholder="例如：白帶、黑帶一段、-45kg")
-        level_submitted = st.form_submit_button("新增級別", use_container_width=True)
-    if level_submitted:
-        if not level_name.strip():
-            st.error("請輸入級別名稱。")
-        else:
-            add_event_level(selected_group.id, level_name.strip())
-            st.success("級別已新增。")
-            st.rerun()
-
-    levels = get_event_levels(selected_group.id)
-    if not levels:
-        st.info("此組別尚未建立級別。")
-        return
-
-    for level in levels:
-        col1, col2 = st.columns([5, 1])
-        col1.write(level.name)
-        if col2.button("刪除級別", key=f"delete-event-level-{level.id}", use_container_width=True):
-            delete_event_level(level.id)
-            st.rerun()
 
 
 def render_admin(df: pd.DataFrame) -> None:
