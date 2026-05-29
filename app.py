@@ -140,8 +140,8 @@ ensure_event_schema()
 
 
 st.set_page_config(
-    page_title="台灣跆拳道賽事報名系統",
-    page_icon="TKD",
+    page_title="跆拳道賽事報名系統",
+    page_icon="賽",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -203,12 +203,13 @@ RANK_LEVELS = [
 ]
 
 UNIT_PAGE = "單位資料"
-PAGE_ALIASES = {"個人與單位": UNIT_PAGE}
-PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", UNIT_PAGE, "管理後台", "系統登入"]
-COACH_PAGES = ["賽事列表", "競賽規程", "線上報名", "我的報名", UNIT_PAGE, "系統登入"]
-ADMIN_PAGES = PAGES
+LOGIN_PAGE = "登入介面"
+ACCOUNT_PAGE = "帳號資料"
+PAGE_ALIASES = {"個人與單位": UNIT_PAGE, "系統登入": LOGIN_PAGE}
+NAV_PAGES = ["賽事列表", "我的報名", UNIT_PAGE, LOGIN_PAGE]
+PAGES = NAV_PAGES + ["競賽規程", "線上報名", "管理後台", ACCOUNT_PAGE]
 ADMIN_ONLY_PAGES = {"管理後台"}
-PROFILE_SECTIONS = ["參賽單位", "隊職員名單", "聯絡人資料"]
+PROFILE_SECTIONS = ["參賽單位", "隊職員名單"]
 
 
 def parse_dateish(value: str | None) -> date | None:
@@ -573,6 +574,8 @@ def start_registration(event_name: str) -> None:
 def request_page_change(page: str) -> None:
     page = PAGE_ALIASES.get(page, page)
     st.session_state["pending_page"] = page
+    if page in NAV_PAGES:
+        st.session_state["nav_page"] = page
 
 
 def apply_pending_page_change() -> None:
@@ -580,6 +583,8 @@ def apply_pending_page_change() -> None:
     page = PAGE_ALIASES.get(page, page)
     if page in PAGES:
         st.session_state["page"] = page
+        if page in NAV_PAGES:
+            st.session_state["nav_page"] = page
 
 
 def go_to_registration_page() -> None:
@@ -592,7 +597,41 @@ def go_to_profile_page() -> None:
 
 def go_home() -> None:
     st.session_state["page"] = "賽事列表"
+    st.session_state["nav_page"] = "賽事列表"
     st.session_state.pop("pending_page", None)
+
+
+def go_to_account_page() -> None:
+    request_page_change(ACCOUNT_PAGE)
+
+
+def go_to_admin_page() -> None:
+    request_page_change("管理後台")
+
+
+def select_nav_page() -> None:
+    st.session_state["page"] = st.session_state["nav_page"]
+    st.session_state.pop("pending_page", None)
+
+
+def brand_logo_path() -> str | None:
+    base_dir = os.path.dirname(__file__)
+    for relative_path in (
+        os.path.join("assets", "logo.png"),
+        os.path.join("assets", "logo.jpg"),
+        os.path.join("assets", "logo.jpeg"),
+        os.path.join("assets", "logo.webp"),
+        os.path.join("assets", "logo.svg"),
+        "logo.png",
+        "logo.jpg",
+        "logo.jpeg",
+        "logo.webp",
+        "logo.svg",
+    ):
+        candidate = os.path.join(base_dir, relative_path)
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def inject_styles() -> None:
@@ -665,6 +704,11 @@ def inject_styles() -> None:
             align-items: center;
             gap: .75rem;
             padding: .85rem .2rem 1rem;
+        }
+
+        .sidebar-logo {
+            max-width: 92px;
+            margin: .85rem 0 .4rem;
         }
 
         .brand-mark {
@@ -1120,7 +1164,7 @@ def is_admin() -> bool:
 
 
 def visible_pages() -> list[str]:
-    return ADMIN_PAGES if is_admin() else COACH_PAGES
+    return NAV_PAGES
 
 
 def can_access_page(page: str) -> bool:
@@ -1432,38 +1476,32 @@ def render_event_cards(events: list[dict]) -> None:
 
 
 def render_hero(df: pd.DataFrame) -> None:
-    team_count = df["報名單位"].nunique() if not df.empty else 0
-    athlete_count = len(df)
-    total_fee = int(df["金額"].sum()) if not df.empty and "金額" in df else 0
-    events = get_events()
+    events = [event for event in get_events() if event["status"] == "熱烈報名中"]
 
     st.markdown(
         f"""
         <section class="hero">
-            <span class="badge hot">TAIWAN TKD ENROLL</span>
-            <h1>台灣跆拳道賽事報名系統</h1>
-            <p>賽事公告、規程瀏覽、選手報名、名單管理、繳費回報與後台統計集中處理，讓隊伍與主辦方都能用更少步驟完成賽事作業。</p>
+            <h1>跆拳道賽事報名系統</h1>
             <div class="hero-stats">
                 <div class="stat"><strong>{len(events)}</strong><span>目前賽事</span></div>
-                <div class="stat"><strong>{team_count}</strong><span>參賽單位</span></div>
-                <div class="stat"><strong>{athlete_count}</strong><span>報名選手</span></div>
             </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-    st.caption(f"目前系統預估報名費合計：NT${total_fee:,}")
 
 
-def render_sidebar() -> tuple[str, str]:
+def render_sidebar() -> str:
     with st.sidebar:
+        logo_path = brand_logo_path()
+        if logo_path:
+            st.image(logo_path, width=96)
         st.markdown(
             """
             <div class="sidebar-brand">
-                <div class="brand-mark">TKD</div>
                 <div>
-                    <strong>TKD ENROLL</strong>
-                    <span>賽事報名與管理平台</span>
+                    <strong>賽事報名網</strong>
+                    <span>跆拳道賽事報名平台</span>
                 </div>
             </div>
             """,
@@ -1472,8 +1510,10 @@ def render_sidebar() -> tuple[str, str]:
         pages = visible_pages()
         if st.session_state.get("page") in PAGE_ALIASES:
             st.session_state["page"] = PAGE_ALIASES[st.session_state["page"]]
-        if "page" not in st.session_state or st.session_state["page"] not in pages:
+        if "page" not in st.session_state or st.session_state["page"] not in PAGES:
             st.session_state["page"] = "賽事列表"
+        if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
+            st.session_state["nav_page"] = st.session_state["page"] if st.session_state["page"] in pages else "賽事列表"
         st.button(
             "回到首頁（賽事列表）",
             key="sidebar-home-button",
@@ -1484,21 +1524,33 @@ def render_sidebar() -> tuple[str, str]:
         page = st.radio(
             "功能選單",
             pages,
-            key="page",
+            key="nav_page",
+            on_change=select_nav_page,
         )
         st.divider()
         if st.session_state.get("account"):
             role_label = "管理員" if is_admin() else "教練"
-            st.success(f"已登入：{st.session_state['account']}（{role_label}）")
+            st.success(f"已登入（{role_label}）")
+            st.button(
+                f"帳號：{st.session_state['account']}",
+                key="sidebar-account-button",
+                on_click=go_to_account_page,
+                use_container_width=True,
+            )
+            if is_admin():
+                st.button(
+                    "管理後台",
+                    key="sidebar-admin-button",
+                    on_click=go_to_admin_page,
+                    use_container_width=True,
+                )
             if not get_user_profile(st.session_state["account"]):
                 st.warning("請先建立聯絡人資料")
         else:
             st.warning("尚未登入")
         st.divider()
-        status_filter = st.selectbox("狀態篩選", ["全部狀態", "熱烈報名中", "即將開放", "報名已截止"])
-        st.divider()
         st.caption("建議使用 Chrome、Edge 或 Safari 開啟，避免內建瀏覽器登入受限。")
-    return page, status_filter
+    return st.session_state.get("page", page)
 
 
 def filter_events(status_filter: str) -> list[dict]:
@@ -1509,27 +1561,14 @@ def filter_events(status_filter: str) -> list[dict]:
 
 
 def render_event_list(events: list[dict], df: pd.DataFrame) -> None:
-    public_events = [event for event in events if event["status"] != "報名已截止"]
-    active_count = len([event for event in events if event["status"] == "熱烈報名中"])
-    soon_count = len([event for event in events if event["status"] == "即將開放"])
+    public_events = [event for event in events if event["status"] == "熱烈報名中"]
 
     render_hero(df)
-    st.markdown("<div class='section-title'>賽事列表</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <div class="summary-strip">
-            <div class="summary-card"><span>目前前台賽事</span><strong>{len(public_events)}</strong></div>
-            <div class="summary-card"><span>熱烈報名中</span><strong>{active_count}</strong></div>
-            <div class="summary-card"><span>即將開放</span><strong>{soon_count}</strong></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("<div class='section-title'>目前前台比賽</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>目前賽事</div>", unsafe_allow_html=True)
     if public_events:
         render_event_cards(public_events)
     else:
-        st.info("目前前台暫無公開中的賽事。")
+        st.info("目前暫無開放報名的比賽。")
 
 
 def render_login_box(prefix: str = "login") -> None:
@@ -1702,6 +1741,18 @@ def render_profile_and_unit_page() -> None:
         use_container_width=True,
     ):
         st.rerun()
+
+
+def render_account_page() -> None:
+    st.markdown("<div class='section-title'>帳號資料</div>", unsafe_allow_html=True)
+    account = current_account()
+    if not account:
+        st.info("請先登入後再修改帳號資料。")
+        render_login_box("account_page")
+        return
+
+    st.caption(f"目前登入帳號：{account}")
+    render_profile_form(account, "account_page")
 
 
 @st.dialog("個人資料告知")
@@ -2168,7 +2219,10 @@ def render_my_registrations(df: pd.DataFrame) -> None:
         mask = df.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
         filtered = df[mask]
 
-    st.metric("目前顯示筆數", len(filtered))
+    estimated_fee = int(filtered["金額"].sum()) if not filtered.empty and "金額" in filtered else 0
+    col_count, col_fee = st.columns(2)
+    col_count.metric("目前顯示筆數", len(filtered))
+    col_fee.metric("目前系統預估報名費合計", f"NT${estimated_fee:,}")
     display_df = filtered if is_admin() else filtered.drop(columns=["帳號"], errors="ignore")
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
@@ -2603,7 +2657,7 @@ def render_admin(df: pd.DataFrame) -> None:
 
 
 def render_login() -> None:
-    st.markdown("<div class='section-title'>登入系統</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>登入介面</div>", unsafe_allow_html=True)
     col1, col2 = st.columns([1.2, 1])
     with col1:
         st.markdown(
@@ -2636,10 +2690,10 @@ def render_login() -> None:
 def main() -> None:
     inject_styles()
     apply_pending_page_change()
-    page, status_filter = render_sidebar()
+    page = render_sidebar()
     page = enforce_page_access(page)
     df = db_to_dataframe(current_account(), include_all=is_admin())
-    events = filter_events(status_filter)
+    events = get_events()
 
     if page == "賽事列表":
         render_event_list(events, df)
@@ -2651,13 +2705,17 @@ def main() -> None:
         render_my_registrations(df)
     elif page == UNIT_PAGE:
         render_profile_and_unit_page()
+    elif page == ACCOUNT_PAGE:
+        render_account_page()
     elif page == "管理後台":
         render_admin(df)
+    elif page == LOGIN_PAGE:
+        render_login()
     else:
         render_login()
 
     st.divider()
-    st.caption("© 2026 台灣跆拳道賽事報名系統。資料僅供賽事管理與報名作業使用。")
+    st.caption("© 2026 跆拳道賽事報名系統。資料僅供賽事管理與報名作業使用。")
 
 
 if __name__ == "__main__":
