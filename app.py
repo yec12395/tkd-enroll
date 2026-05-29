@@ -557,61 +557,118 @@ def inject_styles() -> None:
         """
         <style>
         :root {
-            --primary: #0f5f7a;
-            --primary-dark: #0b3344;
-            --accent: #d63f32;
-            --ink: #16202a;
-            --muted: #627182;
-            --line: #d7e1e8;
+            --brand: #c8202f;
+            --brand-dark: #8f1722;
+            --navy: #17324d;
+            --teal: #0f766e;
+            --gold: #b7791f;
+            --ink: #17202a;
+            --muted: #647184;
+            --line: #e3e7ed;
             --panel: #ffffff;
-            --soft: #f4f8fb;
+            --surface: #f5f6f8;
+            --soft: #fff5f5;
+            --shadow: 0 14px 34px rgba(22, 32, 42, .08);
         }
 
         .stApp {
-            background:
-                radial-gradient(circle at top left, rgba(15, 95, 122, .16), transparent 32rem),
-                linear-gradient(180deg, #f7fbfd 0%, #eef5f8 54%, #f8fafc 100%);
+            background: var(--surface);
             color: var(--ink);
         }
 
+        html,
+        body,
+        [class*="css"] {
+            font-family: "Inter", "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
+        }
+
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0b3344 0%, #0f5f7a 100%);
+            background: #ffffff;
+            border-right: 1px solid var(--line);
+            box-shadow: 8px 0 30px rgba(22, 32, 42, .05);
         }
 
         [data-testid="stSidebar"] * {
-            color: #ffffff !important;
+            color: var(--ink) !important;
+        }
+
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: var(--brand) !important;
         }
 
         [data-testid="stSidebar"] .stRadio > label {
             font-weight: 700;
         }
 
+        [data-testid="stSidebar"] label:has(input:checked) {
+            border-radius: 8px;
+            background: var(--soft);
+            border: 1px solid rgba(200, 32, 47, .22);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+            color: var(--muted) !important;
+        }
+
         .block-container {
-            padding-top: 1.25rem;
+            padding-top: 1rem;
             padding-bottom: 3rem;
-            max-width: 1280px;
+            max-width: 1220px;
+        }
+
+        .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: .75rem;
+            padding: .85rem .2rem 1rem;
+        }
+
+        .brand-mark {
+            display: grid;
+            place-items: center;
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            background: var(--brand);
+            color: #fff !important;
+            font-weight: 900;
+            letter-spacing: 0;
+        }
+
+        .sidebar-brand strong {
+            display: block;
+            color: var(--navy) !important;
+            font-size: 1.05rem;
+            line-height: 1.1;
+        }
+
+        .sidebar-brand span {
+            display: block;
+            color: var(--muted) !important;
+            font-size: .82rem;
         }
 
         .hero {
             position: relative;
             overflow: hidden;
-            border: 1px solid rgba(15, 95, 122, .18);
+            border: 1px solid rgba(23, 50, 77, .2);
             border-radius: 8px;
-            padding: 2rem;
-            min-height: 260px;
+            padding: 2.25rem;
+            min-height: 300px;
             background:
-                linear-gradient(110deg, rgba(11, 51, 68, .96), rgba(15, 95, 122, .88) 54%, rgba(214, 63, 50, .88)),
-                url("https://images.unsplash.com/photo-1544717301-9cdcb1f5940f?auto=format&fit=crop&w=1600&q=80");
+                linear-gradient(90deg, rgba(13, 24, 38, .92) 0%, rgba(23, 50, 77, .76) 52%, rgba(200, 32, 47, .62) 100%),
+                url("https://images.unsplash.com/photo-1555597408-26bc8e548a46?auto=format&fit=crop&w=1800&q=80");
             background-size: cover;
             background-position: center;
             color: white;
-            box-shadow: 0 18px 44px rgba(12, 45, 58, .18);
+            box-shadow: var(--shadow);
         }
 
         .hero h1 {
-            margin: 0;
+            margin: .85rem 0 0;
             max-width: 760px;
-            font-size: clamp(2rem, 4.2vw, 4.4rem);
+            font-size: clamp(2rem, 4vw, 4rem);
             line-height: 1.05;
             letter-spacing: 0;
         }
@@ -625,7 +682,8 @@ def inject_styles() -> None:
 
         .hero-stats,
         .card-grid,
-        .metric-grid {
+        .metric-grid,
+        .summary-strip {
             display: grid;
             gap: .9rem;
         }
@@ -638,10 +696,11 @@ def inject_styles() -> None:
 
         .stat,
         .event-card,
-        .info-panel {
+        .info-panel,
+        .summary-card {
             border: 1px solid var(--line);
             border-radius: 8px;
-            background: rgba(255, 255, 255, .94);
+            background: rgba(255, 255, 255, .96);
         }
 
         .stat {
@@ -652,7 +711,7 @@ def inject_styles() -> None:
         .stat strong {
             display: block;
             font-size: 1.45rem;
-            color: var(--primary-dark);
+            color: var(--brand);
         }
 
         .stat span {
@@ -661,10 +720,13 @@ def inject_styles() -> None:
         }
 
         .section-title {
-            margin: 1.75rem 0 .75rem;
+            margin: 1.9rem 0 .8rem;
+            padding-left: .75rem;
+            border-left: 4px solid var(--brand);
             font-size: 1.45rem;
             font-weight: 800;
-            color: var(--primary-dark);
+            color: var(--navy);
+            letter-spacing: 0;
         }
 
         .card-grid {
@@ -672,15 +734,18 @@ def inject_styles() -> None:
         }
 
         .event-card {
-            padding: 1.05rem;
-            min-height: 250px;
-            box-shadow: 0 10px 28px rgba(24, 61, 78, .08);
+            position: relative;
+            padding: 1.15rem;
+            min-height: 268px;
+            box-shadow: var(--shadow);
+            border-top: 4px solid var(--brand);
         }
 
         .event-card h3 {
-            margin: .7rem 0 .45rem;
-            color: var(--primary-dark);
-            font-size: 1.2rem;
+            margin: .85rem 0 .55rem;
+            color: var(--navy);
+            font-size: 1.18rem;
+            line-height: 1.35;
         }
 
         .event-card p {
@@ -688,29 +753,54 @@ def inject_styles() -> None:
             color: var(--muted);
         }
 
+        .event-description {
+            min-height: 3.2rem;
+        }
+
+        .event-meta {
+            display: grid;
+            gap: .35rem;
+            margin-top: .85rem;
+            padding-top: .85rem;
+            border-top: 1px solid var(--line);
+        }
+
+        .event-meta div {
+            display: flex;
+            justify-content: space-between;
+            gap: .75rem;
+            font-size: .92rem;
+            color: var(--muted);
+        }
+
+        .event-meta strong {
+            color: var(--ink);
+        }
+
         .badge {
             display: inline-flex;
             align-items: center;
-            padding: .28rem .55rem;
+            padding: .28rem .62rem;
             border-radius: 999px;
             font-size: .78rem;
             font-weight: 800;
             color: #ffffff;
-            background: var(--primary);
+            background: var(--navy);
         }
 
-        .badge.hot { background: #c7352b; }
-        .badge.soon { background: #846514; }
+        .badge.hot { background: var(--brand); }
+        .badge.soon { background: var(--gold); }
         .badge.closed { background: #5f6c75; }
 
         .info-panel {
-            padding: 1.1rem;
-            box-shadow: 0 10px 28px rgba(24, 61, 78, .06);
+            padding: 1.15rem;
+            box-shadow: var(--shadow);
+            border-left: 4px solid var(--brand);
         }
 
         .info-panel h3 {
             margin-top: 0;
-            color: var(--primary-dark);
+            color: var(--navy);
         }
 
         .small-note {
@@ -718,31 +808,136 @@ def inject_styles() -> None:
             font-size: .92rem;
         }
 
+        .summary-strip {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            margin: 1rem 0 .5rem;
+        }
+
+        .summary-card {
+            padding: 1rem;
+            box-shadow: 0 8px 22px rgba(22, 32, 42, .05);
+        }
+
+        .summary-card span {
+            display: block;
+            color: var(--muted);
+            font-size: .85rem;
+        }
+
+        .summary-card strong {
+            display: block;
+            margin-top: .25rem;
+            color: var(--navy);
+            font-size: 1.45rem;
+        }
+
+        h1, h2, h3, h4 {
+            color: var(--navy);
+            letter-spacing: 0;
+        }
+
+        [data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: .85rem 1rem;
+            box-shadow: 0 8px 22px rgba(22, 32, 42, .05);
+        }
+
+        [data-testid="stForm"] {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 8px 22px rgba(22, 32, 42, .04);
+        }
+
+        [data-baseweb="input"],
+        [data-baseweb="select"],
+        [data-baseweb="textarea"],
+        textarea {
+            border-radius: 8px;
+        }
+
+        [data-testid="stDataFrame"] {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 8px 22px rgba(22, 32, 42, .04);
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 8px;
+            border: 1px solid var(--line);
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: .35rem;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 8px 8px 0 0;
+            padding: .65rem 1rem;
+            font-weight: 800;
+        }
+
+        .stTabs [aria-selected="true"] {
+            color: var(--brand) !important;
+            border-bottom: 3px solid var(--brand);
+            background: #ffffff;
+        }
+
         .stButton > button,
         .stDownloadButton > button,
         [data-testid="stFormSubmitButton"] button {
-            border-radius: 6px;
-            border: 1px solid #0f5f7a;
-            background: #0f5f7a;
+            border-radius: 8px;
+            border: 1px solid var(--brand);
+            background: var(--brand);
             color: #ffffff;
             font-weight: 800;
+            min-height: 2.55rem;
+            box-shadow: 0 8px 18px rgba(200, 32, 47, .18);
         }
 
         .stButton > button:hover,
         .stDownloadButton > button:hover,
         [data-testid="stFormSubmitButton"] button:hover {
-            border-color: #0b3344;
-            background: #0b3344;
+            border-color: var(--brand-dark);
+            background: var(--brand-dark);
             color: #ffffff;
+        }
+
+        .stButton > button:disabled,
+        .stDownloadButton > button:disabled,
+        [data-testid="stFormSubmitButton"] button:disabled {
+            background: #e3e7ed;
+            border-color: #d8dee8;
+            color: #8b97a6;
+            box-shadow: none;
+        }
+
+        div[data-testid="stExpander"] {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #ffffff;
+            box-shadow: 0 8px 22px rgba(22, 32, 42, .04);
+        }
+
+        hr {
+            margin: 1.5rem 0;
+            border-color: var(--line);
         }
 
         @media (max-width: 900px) {
             .hero {
                 padding: 1.25rem;
+                min-height: 260px;
             }
 
             .hero-stats,
-            .card-grid {
+            .card-grid,
+            .summary-strip {
                 grid-template-columns: 1fr;
             }
         }
@@ -1086,11 +1281,13 @@ def render_event_cards(events: list[dict]) -> None:
                     <div class="event-card">
                         <span class="badge {event_status_class(event['status'])}">{event['status']}</span>
                         <h3>{event['name']}</h3>
-                        <p>{event['description']}</p>
-                        <p><strong>日期：</strong>{event['date']}</p>
-                        <p><strong>地點：</strong>{event['venue']}</p>
-                        <p><strong>截止：</strong>{event['deadline']}</p>
-                        <p><strong>費用：</strong>NT${event['fee']:,}</p>
+                        <p class="event-description">{event['description']}</p>
+                        <div class="event-meta">
+                            <div><span>比賽日期</span><strong>{event['date']}</strong></div>
+                            <div><span>比賽地點</span><strong>{event['venue']}</strong></div>
+                            <div><span>報名截止</span><strong>{event['deadline']}</strong></div>
+                            <div><span>報名費用</span><strong>NT${event['fee']:,}</strong></div>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1107,18 +1304,15 @@ def render_event_cards(events: list[dict]) -> None:
 def render_hero(df: pd.DataFrame) -> None:
     team_count = df["報名單位"].nunique() if not df.empty else 0
     athlete_count = len(df)
-    total_fee = 0
+    total_fee = int(df["金額"].sum()) if not df.empty and "金額" in df else 0
     events = get_events()
-    if not df.empty:
-        for event in events:
-            total_fee += event["fee"] * len(df[df["賽事"] == event["name"]])
 
     st.markdown(
         f"""
         <section class="hero">
-            <span class="badge hot">線上報名平台</span>
+            <span class="badge hot">TAIWAN TKD ENROLL</span>
             <h1>台灣跆拳道賽事報名系統</h1>
-            <p>整合賽事公告、規程瀏覽、選手報名、名單管理、統計分析與 Excel 匯出，讓主辦單位與參賽隊伍都能快速完成作業。</p>
+            <p>賽事公告、規程瀏覽、選手報名、名單管理、繳費回報與後台統計集中處理，讓隊伍與主辦方都能用更少步驟完成賽事作業。</p>
             <div class="hero-stats">
                 <div class="stat"><strong>{len(events)}</strong><span>目前賽事</span></div>
                 <div class="stat"><strong>{team_count}</strong><span>參賽單位</span></div>
@@ -1133,8 +1327,18 @@ def render_hero(df: pd.DataFrame) -> None:
 
 def render_sidebar() -> tuple[str, str]:
     with st.sidebar:
-        st.markdown("## TKD ENROLL")
-        st.caption("賽事報名與管理平台")
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <div class="brand-mark">TKD</div>
+                <div>
+                    <strong>TKD ENROLL</strong>
+                    <span>賽事報名與管理平台</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         pages = visible_pages()
         if "page" not in st.session_state or st.session_state["page"] not in pages:
             st.session_state["page"] = "賽事列表"
@@ -1167,9 +1371,21 @@ def filter_events(status_filter: str) -> list[dict]:
 
 def render_event_list(events: list[dict], df: pd.DataFrame) -> None:
     public_events = [event for event in events if event["status"] != "報名已截止"]
+    active_count = len([event for event in events if event["status"] == "熱烈報名中"])
+    soon_count = len([event for event in events if event["status"] == "即將開放"])
 
+    render_hero(df)
     st.markdown("<div class='section-title'>賽事列表</div>", unsafe_allow_html=True)
-    st.metric("目前賽事", len(public_events))
+    st.markdown(
+        f"""
+        <div class="summary-strip">
+            <div class="summary-card"><span>目前前台賽事</span><strong>{len(public_events)}</strong></div>
+            <div class="summary-card"><span>熱烈報名中</span><strong>{active_count}</strong></div>
+            <div class="summary-card"><span>即將開放</span><strong>{soon_count}</strong></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("<div class='section-title'>目前前台比賽</div>", unsafe_allow_html=True)
     if public_events:
         render_event_cards(public_events)
