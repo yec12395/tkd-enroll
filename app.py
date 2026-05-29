@@ -377,6 +377,23 @@ def format_event_dates(value: str | None) -> str:
     return "、".join(dates) if dates else ""
 
 
+def format_event_date_range(value: str | None) -> str:
+    parsed_dates = [parse_dateish(item) for item in split_event_dates(value)]
+    parsed_dates = sorted(item for item in parsed_dates if item is not None)
+    if not parsed_dates:
+        return format_event_dates(value)
+
+    start = parsed_dates[0]
+    end = parsed_dates[-1]
+    if start == end:
+        return start.isoformat()
+    if start.year == end.year and start.month == end.month:
+        return f"{start.isoformat()}~{end.day:02d}"
+    if start.year == end.year:
+        return f"{start.isoformat()}~{end.month:02d}-{end.day:02d}"
+    return f"{start.isoformat()}~{end.isoformat()}"
+
+
 def google_drive_pdf_embed_url(value: str | None) -> str:
     if not value:
         return ""
@@ -1603,10 +1620,14 @@ def render_staff_manager(account_email: str) -> None:
     selected_staff_unit = st.session_state.get("staff-member-unit")
     if selected_staff_unit not in unit_options:
         st.session_state["staff-member-unit"] = list(unit_options.keys())[0]
+    if st.session_state.get("staff-member-role") not in ["領隊", "教練", "管理"]:
+        st.session_state["staff-member-role"] = "領隊"
+    if st.session_state.pop("clear-staff-member-name", False):
+        st.session_state["staff-member-name"] = ""
 
     with st.form("staff_member_form"):
         unit_name = st.selectbox("所屬單位", list(unit_options.keys()), key="staff-member-unit")
-        role = st.selectbox("職稱", ["領隊", "教練", "管理"])
+        role = st.selectbox("職稱", ["領隊", "教練", "管理"], key="staff-member-role")
         name = st.text_input("姓名 *", key="staff-member-name")
         submitted = st.form_submit_button("新增隊職員", use_container_width=True)
 
@@ -1616,6 +1637,7 @@ def render_staff_manager(account_email: str) -> None:
         else:
             add_staff_member(account_email, unit_options[unit_name], role, name.strip(), "")
             st.success("隊職員已新增。")
+            st.session_state["clear-staff-member-name"] = True
             st.rerun()
 
     staff_members = get_staff_members(account_email)
@@ -1874,12 +1896,13 @@ def render_registration_form() -> None:
         st.rerun()
 
     unit_options = {unit.unit_name: unit for unit in units}
+    event_date_display = format_event_date_range(selected_event.get("date_raw") or selected_event.get("date"))
 
     st.markdown(
         f"""
         <div class="info-panel">
             <h3>{event_name}</h3>
-            <p><strong>比賽日期：</strong>{selected_event['date']}　<strong>地點：</strong>{selected_event['venue']}</p>
+            <p><strong>比賽日期：</strong>{event_date_display}　<strong>地點：</strong>{selected_event['venue']}</p>
             <p><strong>報名期間：</strong>{selected_event['registration_start']} 至 {selected_event['deadline']}</p>
         </div>
         """,
@@ -1898,6 +1921,8 @@ def render_registration_form() -> None:
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         unit_names = list(unit_options.keys())
+        if st.session_state.get("registration_unit_name") not in unit_names:
+            st.session_state["registration_unit_name"] = unit_names[0]
         selected_unit_name = st.selectbox("參賽單位", unit_names, key="registration_unit_name")
         selected_unit = unit_options[selected_unit_name]
         unit_staff = get_staff_members(account, selected_unit.id)
