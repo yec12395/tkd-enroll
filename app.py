@@ -169,8 +169,26 @@ def ensure_event_schema() -> None:
 ensure_event_schema()
 
 
+DEFAULT_SITE_NAME = "賽事報名網"
+DEFAULT_SITE_TAGLINE = "跆拳道賽事報名平台"
+SITE_NAME_SETTING_KEY = "site_name"
+
+
+def initial_site_name() -> str:
+    db = SessionLocal()
+    try:
+        asset = db.query(SiteAsset).filter(SiteAsset.asset_key == SITE_NAME_SETTING_KEY).first()
+        if not asset or not asset.data_base64:
+            return DEFAULT_SITE_NAME
+        return base64.b64decode(asset.data_base64.encode("ascii")).decode("utf-8").strip() or DEFAULT_SITE_NAME
+    except Exception:
+        return DEFAULT_SITE_NAME
+    finally:
+        db.close()
+
+
 st.set_page_config(
-    page_title="跆拳道賽事報名系統",
+    page_title=initial_site_name(),
     page_icon="賽",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -202,10 +220,12 @@ RANK_LEVELS = [
 UNIT_PAGE = "單位資料"
 LOGIN_PAGE = "登入介面"
 ACCOUNT_PAGE = "帳號資料"
+VISUAL_SETTINGS_PAGE = "視覺設定"
 PAGE_ALIASES = {"個人與單位": UNIT_PAGE, "系統登入": LOGIN_PAGE}
 NAV_PAGES = ["賽事列表", "我的報名", UNIT_PAGE, LOGIN_PAGE]
-PAGES = NAV_PAGES + ["競賽規程", "線上報名", "管理後台", ACCOUNT_PAGE]
+PAGES = NAV_PAGES + ["競賽規程", "線上報名", "管理後台", VISUAL_SETTINGS_PAGE, ACCOUNT_PAGE]
 ADMIN_ONLY_PAGES = {"管理後台"}
+SUPER_ADMIN_ONLY_PAGES = {VISUAL_SETTINGS_PAGE}
 PROFILE_SECTIONS = ["參賽單位", "隊職員名單"]
 PAGE_QUERY_VALUES = {
     "賽事列表": "events",
@@ -215,6 +235,7 @@ PAGE_QUERY_VALUES = {
     "競賽規程": "rules",
     "線上報名": "register",
     "管理後台": "admin",
+    VISUAL_SETTINGS_PAGE: "visual",
     ACCOUNT_PAGE: "account",
 }
 QUERY_PAGE_VALUES = {
@@ -229,6 +250,7 @@ QUERY_PAGE_VALUES = {
     "rules": "競賽規程",
     "register": "線上報名",
     "admin": "管理後台",
+    "visual": VISUAL_SETTINGS_PAGE,
     "account": ACCOUNT_PAGE,
 }
 
@@ -754,6 +776,10 @@ def go_to_admin_page() -> None:
     request_page_change("管理後台")
 
 
+def go_to_visual_settings_page() -> None:
+    request_page_change(VISUAL_SETTINGS_PAGE)
+
+
 def select_nav_page() -> None:
     st.session_state["page"] = st.session_state["nav_page"]
     st.session_state.pop("pending_page", None)
@@ -843,6 +869,36 @@ def delete_site_asset(asset_key: str) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def get_site_setting(setting_key: str, default: str = "") -> str:
+    asset = get_site_asset(setting_key)
+    if not asset or not asset["data_base64"]:
+        return default
+    try:
+        return base64.b64decode(asset["data_base64"].encode("ascii")).decode("utf-8").strip() or default
+    except Exception:
+        return default
+
+
+def save_site_setting(setting_key: str, value: str) -> None:
+    encoded_data = base64.b64encode(value.strip().encode("utf-8")).decode("ascii")
+    db = SessionLocal()
+    try:
+        asset = db.query(SiteAsset).filter(SiteAsset.asset_key == setting_key).first()
+        if asset is None:
+            asset = SiteAsset(asset_key=setting_key)
+            db.add(asset)
+        asset.filename = "site-setting"
+        asset.content_type = "text/plain; charset=utf-8"
+        asset.data_base64 = encoded_data
+        db.commit()
+    finally:
+        db.close()
+
+
+def site_name() -> str:
+    return get_site_setting(SITE_NAME_SETTING_KEY, DEFAULT_SITE_NAME)
 
 
 def inject_styles() -> None:
@@ -1480,6 +1536,8 @@ def visible_pages() -> list[str]:
 
 
 def can_access_page(page: str) -> bool:
+    if page in SUPER_ADMIN_ONLY_PAGES:
+        return is_admin()
     return page not in ADMIN_ONLY_PAGES or can_access_admin_backend()
 
 
@@ -1489,7 +1547,7 @@ def enforce_page_access(page: str) -> str:
 
     st.session_state["page"] = "賽事列表"
     st.session_state.pop("pending_page", None)
-    st.warning("管理後台僅限最高管理員與主辦單位使用，已為你切回賽事列表。")
+    st.warning("此頁面權限不足，已為你切回賽事列表。")
     return "賽事列表"
 
 
@@ -2047,8 +2105,24 @@ def render_site_asset_upload_box(asset_key: str, label: str, help_text: str, cov
 
 
 def render_site_asset_admin() -> None:
-    st.subheader("網站視覺設定")
-    st.caption("上傳後會立即套用在側邊欄 LOGO 與首頁背景。建議 LOGO 使用透明 PNG，背景圖使用橫式照片。")
+    st.markdown("<div class='section-title'>網站視覺設定</div>", unsafe_allow_html=True)
+    if not is_admin():
+        st.error("此頁僅限最高管理員使用。")
+        return
+
+    st.caption("設定後會立即套用在左側品牌名稱、首頁標題、側邊欄 LOGO 與首頁背景。建議 LOGO 使用透明 PNG，背景圖使用橫式照片。")
+    with st.form("site_identity_form"):
+        name = st.text_input("網站名稱", value=site_name(), max_chars=40)
+        submitted = st.form_submit_button("儲存網站名稱", use_container_width=True)
+    if submitted:
+        if not name.strip():
+            st.error("請輸入網站名稱。")
+        else:
+            save_site_setting(SITE_NAME_SETTING_KEY, name)
+            st.success("網站名稱已更新。")
+            st.rerun()
+
+    st.divider()
     col_logo, col_background = st.columns(2)
     with col_logo:
         render_site_asset_upload_box(
@@ -2104,11 +2178,12 @@ def render_event_cards(events: list[dict]) -> None:
 
 def render_hero(df: pd.DataFrame) -> None:
     events = [event for event in get_events() if event["status"] == "熱烈報名中"]
+    current_site_name = escape(site_name())
 
     st.markdown(
         f"""
         <section class="hero">
-            <h1>跆拳道賽事報名系統</h1>
+            <h1>{current_site_name}</h1>
             <div class="hero-stats">
                 <div class="stat"><strong>{len(events)}</strong><span>目前賽事</span></div>
             </div>
@@ -2120,6 +2195,7 @@ def render_hero(df: pd.DataFrame) -> None:
 
 def render_sidebar() -> str:
     with st.sidebar:
+        current_site_name = escape(site_name())
         logo_uri = site_asset_data_uri("site_logo")
         if logo_uri:
             st.markdown(
@@ -2131,11 +2207,11 @@ def render_sidebar() -> str:
             if logo_path:
                 st.image(logo_path, width=96)
         st.markdown(
-            """
+            f"""
             <div class="sidebar-brand">
                 <div>
-                    <strong>賽事報名網</strong>
-                    <span>跆拳道賽事報名平台</span>
+                    <strong>{current_site_name}</strong>
+                    <span>{escape(DEFAULT_SITE_TAGLINE)}</span>
                 </div>
             </div>
             """,
@@ -2177,6 +2253,13 @@ def render_sidebar() -> str:
                     "管理後台",
                     key="sidebar-admin-button",
                     on_click=go_to_admin_page,
+                    use_container_width=True,
+                )
+            if is_admin():
+                st.button(
+                    "視覺設定",
+                    key="sidebar-visual-settings-button",
+                    on_click=go_to_visual_settings_page,
                     use_container_width=True,
                 )
             st.button(
@@ -3152,9 +3235,6 @@ def render_event_hierarchy_tree(event_name: str) -> None:
 
 
 def render_event_admin() -> None:
-    render_site_asset_admin()
-    st.divider()
-
     st.subheader("新增賽事")
     with st.form("add_event_form", clear_on_submit=True):
         name = st.text_input("賽事名稱 *")
@@ -3569,6 +3649,8 @@ def main() -> None:
         render_profile_and_unit_page()
     elif page == ACCOUNT_PAGE:
         render_account_page()
+    elif page == VISUAL_SETTINGS_PAGE:
+        render_site_asset_admin()
     elif page == "管理後台":
         render_admin(
             db_to_dataframe(
@@ -3583,7 +3665,7 @@ def main() -> None:
         render_login()
 
     st.divider()
-    st.caption("© 2026 跆拳道賽事報名系統。資料僅供賽事管理與報名作業使用。")
+    st.caption(f"© 2026 {site_name()}。資料僅供賽事管理與報名作業使用。")
 
 
 if __name__ == "__main__":
