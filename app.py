@@ -7,6 +7,7 @@ import os
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from sqlalchemy.exc import OperationalError
 
 from database import Base, SessionLocal, engine
 from models import (
@@ -30,7 +31,26 @@ zh_calendar_component = (
     else None
 )
 
-Base.metadata.create_all(bind=engine)
+def is_schema_race_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return "already exists" in message or "duplicate table" in message or "duplicate index" in message
+
+
+def create_database_tables() -> None:
+    try:
+        Base.metadata.create_all(bind=engine)
+    except OperationalError as exc:
+        if not is_schema_race_error(exc):
+            raise
+        for table in Base.metadata.sorted_tables:
+            try:
+                table.create(bind=engine, checkfirst=True)
+            except OperationalError as table_exc:
+                if not is_schema_race_error(table_exc):
+                    raise
+
+
+create_database_tables()
 
 ADMIN_ACCESS_CODE = "admin2026"
 
