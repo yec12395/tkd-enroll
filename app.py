@@ -1453,6 +1453,10 @@ def google_auth_configured() -> bool:
     return google_auth_provider() is not None and not google_auth_missing_settings()
 
 
+def show_google_auth_setup_details() -> bool:
+    return is_admin() or os.getenv("SHOW_AUTH_SETUP") == "1"
+
+
 def google_user_value(key: str) -> str:
     user = getattr(st, "user", None)
     if user is None:
@@ -1489,7 +1493,7 @@ def sync_authenticated_user() -> None:
 def login_with_google() -> None:
     missing = google_auth_missing_settings()
     if missing:
-        st.error("Google 登入尚未完成設定：" + "、".join(missing))
+        st.error("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
         return
     provider = google_auth_provider()
     if provider is None:
@@ -2094,12 +2098,13 @@ def render_login_box(prefix: str = "login") -> None:
             use_container_width=True,
         )
     else:
-        missing = google_auth_missing_settings()
-        st.warning("Google 登入尚未完成設定，暫時顯示本機測試登入。")
-        with st.expander("查看 Google 登入設定缺少項目"):
-            st.write("缺少：" + "、".join(missing))
-            st.code(
-                """SUPER_ADMIN_EMAILS = "your-email@gmail.com"
+        st.warning("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
+        if show_google_auth_setup_details():
+            missing = google_auth_missing_settings()
+            with st.expander("Google 登入設定檢查"):
+                st.write("缺少：" + "、".join(missing))
+                st.code(
+                    """SUPER_ADMIN_EMAILS = "your-email@gmail.com"
 
 [auth]
 redirect_uri = "https://tkd.doubleshot.tech/app/oauth2callback"
@@ -2110,8 +2115,10 @@ client_id = "your-google-client-id.apps.googleusercontent.com"
 client_secret = "your-google-client-secret"
 server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
 """,
-                language="toml",
-            )
+                    language="toml",
+                )
+    if google_auth_configured() and not show_google_auth_setup_details():
+        return
     with st.expander("本機測試登入", expanded=not google_auth_configured()):
         account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
         admin_code = st.text_input("最高管理員代碼（選填）", type="password", key=f"{prefix}_admin_code")
