@@ -45,6 +45,15 @@ class UserProfile(Base):
     role = Column(String, default="coach")
 
 
+class AccountCredential(Base):
+    __tablename__ = "account_credentials"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, index=True)
+    password_hash = Column(String)
+    role = Column(String, default="registrant")
+
+
 class SiteAsset(Base):
     __tablename__ = "site_assets"
 

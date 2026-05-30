@@ -1,8 +1,12 @@
 from datetime import date, datetime, time, timedelta
 import base64
+import hashlib
 from html import escape
+import hmac
 from io import BytesIO
 import os
+import re
+import secrets
 
 import pandas as pd
 import streamlit as st
@@ -11,6 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from database import Base, SessionLocal, engine
 from models import (
+    AccountCredential,
     CompetitionEvent,
     EventPermission,
     EventGroup,
@@ -52,7 +57,9 @@ def create_database_tables() -> None:
 
 create_database_tables()
 
-ADMIN_ACCESS_CODE = "admin2026"
+DEFAULT_ADMIN_USERNAME = "yec12395"
+DEFAULT_ADMIN_PASSWORD_HASH = "pbkdf2_sha256$260000$dGtkLWVucm9sbC1hZG1pbi12MQ==$YnIoOx0L1Kc2PngOnBAnv8_NpeOalaRa0SvtRW8bEqQ="
+PASSWORD_HASH_ITERATIONS = 260000
 
 
 def ensure_registration_schema() -> None:
@@ -991,43 +998,11 @@ def inject_styles() -> None:
             line-height: 1.75;
         }
 
-        .external-login-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 2.75rem;
-            padding: .75rem 1rem;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            background: #ffffff;
-            color: var(--navy) !important;
-            font-weight: 800;
-            text-decoration: none !important;
-            box-shadow: 0 10px 24px rgba(10, 36, 64, .08);
-        }
-
-        .external-login-link:hover {
-            border-color: var(--brand);
-            color: var(--brand) !important;
-        }
-
         .login-actions {
             display: grid;
             grid-template-columns: 1.1fr .9fr;
             gap: .75rem;
             align-items: stretch;
-        }
-
-        .google-wordmark {
-            display: inline-grid;
-            place-items: center;
-            width: 1.45rem;
-            height: 1.45rem;
-            margin-right: .45rem;
-            border-radius: 999px;
-            background: #ffffff;
-            color: #4285f4;
-            font-weight: 900;
         }
 
         .hero {
@@ -1532,203 +1507,152 @@ def read_secret(*keys):
         return None
 
 
-def parse_email_list(value) -> set[str]:
-    if not value:
-        return set()
-    if isinstance(value, str):
-        parts = value.replace("\n", ",").split(",")
-    else:
-        parts = list(value)
-    return {str(item).strip().lower() for item in parts if str(item).strip()}
+def normalize_username(username: str | None) -> str:
+    return (username or "").strip().lower()
 
 
-def configured_super_admin_emails() -> set[str]:
-    emails = set()
-    for secret_path in (("SUPER_ADMIN_EMAILS",), ("ADMIN_EMAILS",), ("app", "super_admin_emails")):
-        emails.update(parse_email_list(read_secret(*secret_path)))
-    emails.update(parse_email_list(os.getenv("SUPER_ADMIN_EMAILS")))
-    emails.update(parse_email_list(os.getenv("ADMIN_EMAILS")))
-    return emails
+def validate_username(username: str) -> str | None:
+    if not username:
+        return "請輸入帳號。"
+    if len(username) < 3 or len(username) > 50:
+        return "帳號長度需為 3 到 50 個字元。"
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]+", username):
+        return "帳號只能使用英文字母、數字、底線、橫線、點或 @。"
+    return None
 
 
-def google_auth_provider() -> str | None:
-    auth = read_secret("auth")
-    if not auth or not hasattr(st, "login"):
+def encode_password_hash(password: str, salt: bytes | None = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return (
+        f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}$"
+        f"{base64.urlsafe_b64encode(salt).decode('ascii')}$"
+        f"{base64.urlsafe_b64encode(digest).decode('ascii')}"
+    )
+
+
+def verify_password(password: str, password_hash: str | None) -> bool:
+    if not password_hash:
+        return False
+    try:
+        algorithm, iterations, salt_text, digest_text = password_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+        actual = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            int(iterations),
+        )
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def get_account_credential(username: str | None) -> AccountCredential | None:
+    normalized = normalize_username(username)
+    if not normalized:
         return None
-    return "default"
-
-
-def secret_mapping_value(mapping, key: str):
-    if not mapping:
-        return None
+    db = SessionLocal()
     try:
-        return mapping.get(key)
-    except Exception:
-        try:
-            return mapping[key]
-        except Exception:
-            return None
+        return db.query(AccountCredential).filter(AccountCredential.username == normalized).first()
+    finally:
+        db.close()
 
 
-def google_auth_missing_settings() -> list[str]:
-    missing = []
-    if not hasattr(st, "login"):
-        missing.append("streamlit[auth]")
-        return missing
-
-    auth = read_secret("auth")
-    if not auth:
-        return [
-            "[auth]",
-            "auth.redirect_uri",
-            "auth.cookie_secret",
-            "auth.client_id",
-            "auth.client_secret",
-            "auth.server_metadata_url",
-        ]
-
-    for key in ("redirect_uri", "cookie_secret"):
-        if not secret_mapping_value(auth, key):
-            missing.append(f"auth.{key}")
-
-    for key in ("client_id", "client_secret", "server_metadata_url"):
-        if not secret_mapping_value(auth, key):
-            missing.append(f"auth.{key}")
-    return missing
+def account_credential_exists(username: str | None) -> bool:
+    return get_account_credential(username) is not None
 
 
-def configured_redirect_uri() -> str:
-    return str(secret_mapping_value(read_secret("auth"), "redirect_uri") or "").strip()
+def create_password_account(username: str, password: str, role: str = ROLE_REGISTRANT) -> tuple[bool, str]:
+    normalized = normalize_username(username)
+    username_error = validate_username(normalized)
+    if username_error:
+        return False, username_error
+    if len(password) < 6:
+        return False, "密碼至少需要 6 個字元。"
 
-
-def configured_app_url() -> str:
-    redirect_uri = configured_redirect_uri()
-    suffix = "/oauth2callback"
-    if redirect_uri.endswith(suffix):
-        return redirect_uri[:-len(suffix)]
-    return str(os.getenv("PUBLIC_APP_URL") or "").strip().rstrip("/")
-
-
-def google_auth_configured() -> bool:
-    return google_auth_provider() is not None and not google_auth_missing_settings()
-
-
-def show_google_auth_setup_details() -> bool:
-    return is_admin() or os.getenv("SHOW_AUTH_SETUP") == "1"
-
-
-def streamlit_user_info() -> dict:
-    user = getattr(st, "user", None)
-    if user is None:
-        return {}
-
+    db = SessionLocal()
     try:
-        info = user.to_dict()
-    except Exception:
-        try:
-            info = dict(user)
-        except Exception:
-            info = {}
+        if db.query(AccountCredential).filter(AccountCredential.username == normalized).first():
+            return False, "此帳號已存在。"
+        normalized_role = normalize_role(role)
+        db.add(
+            AccountCredential(
+                username=normalized,
+                password_hash=encode_password_hash(password),
+                role=normalized_role,
+            )
+        )
+        profile = db.query(UserProfile).filter(UserProfile.account_email == normalized).first()
+        if profile is None:
+            profile = UserProfile(account_email=normalized, role=normalized_role)
+            db.add(profile)
+        else:
+            profile.role = normalized_role if normalized_role == ROLE_SUPER_ADMIN else normalize_role(profile.role)
+        db.commit()
+        return True, "帳號已建立。"
+    finally:
+        db.close()
 
+
+def ensure_default_admin_credentials() -> None:
+    admin_username = normalize_username(
+        read_secret("ADMIN_USERNAME") or os.getenv("ADMIN_USERNAME") or DEFAULT_ADMIN_USERNAME
+    )
+    password_override = read_secret("ADMIN_PASSWORD") or os.getenv("ADMIN_PASSWORD")
+    password_hash = encode_password_hash(str(password_override)) if password_override else DEFAULT_ADMIN_PASSWORD_HASH
+
+    db = SessionLocal()
     try:
-        info.setdefault("is_logged_in", getattr(user, "is_logged_in"))
-    except Exception:
-        pass
-    return info
+        credential = db.query(AccountCredential).filter(AccountCredential.username == admin_username).first()
+        if credential is None:
+            credential = AccountCredential(
+                username=admin_username,
+                password_hash=password_hash,
+                role=ROLE_SUPER_ADMIN,
+            )
+            db.add(credential)
+        else:
+            credential.role = ROLE_SUPER_ADMIN
+            if password_override:
+                credential.password_hash = password_hash
+
+        profile = db.query(UserProfile).filter(UserProfile.account_email == admin_username).first()
+        if profile is None:
+            profile = UserProfile(account_email=admin_username, role=ROLE_SUPER_ADMIN)
+            db.add(profile)
+        else:
+            profile.role = ROLE_SUPER_ADMIN
+        db.commit()
+    finally:
+        db.close()
 
 
-def google_user_value(key: str) -> str:
-    info = streamlit_user_info()
-    if key in info and info[key]:
-        return str(info[key]).strip()
-    if key == "email":
-        for alt_key in ("preferred_username", "upn"):
-            if info.get(alt_key):
-                return str(info[alt_key]).strip()
-    user = getattr(st, "user", None)
-    try:
-        return str(getattr(user, key, "") or user.get(key, "") or "").strip()
-    except Exception:
-        return str(getattr(user, key, "") or "").strip()
+def authenticate_password_account(username: str, password: str) -> tuple[bool, str]:
+    normalized = normalize_username(username)
+    credential = get_account_credential(normalized)
+    if not credential or not verify_password(password, credential.password_hash):
+        return False, "帳號或密碼錯誤。"
 
-
-def google_user_is_logged_in() -> bool:
-    info = streamlit_user_info()
-    has_identity = bool(info.get("email") or info.get("preferred_username") or info.get("sub"))
-    if "is_logged_in" in info:
-        value = info["is_logged_in"]
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes"} or has_identity
-        return bool(value) or has_identity
-    user = getattr(st, "user", None)
-    try:
-        return bool(getattr(user, "is_logged_in", False)) or has_identity
-    except Exception:
-        return has_identity
-
-
-def auth_debug_enabled() -> bool:
-    return query_param_value("debug_auth") == "1" or os.getenv("SHOW_AUTH_DEBUG") == "1"
-
-
-def auth_status_payload() -> dict:
-    safe_info = {
-        key: ("***" if "token" in key.lower() else value)
-        for key, value in streamlit_user_info().items()
-        if key != "tokens"
-    }
-    return {
-        "st_user": safe_info,
-        "google_user_is_logged_in": google_user_is_logged_in(),
-        "google_email": google_user_value("email"),
-        "session_account": st.session_state.get("account"),
-        "auth_source": st.session_state.get("auth_source"),
-        "auth_missing_settings": google_auth_missing_settings(),
-        "configured_redirect_uri": configured_redirect_uri(),
-        "canonical_app_url": configured_app_url(),
-        "query_page": query_param_value("page"),
-    }
-
-
-def render_auth_debug() -> None:
-    if not auth_debug_enabled():
-        return
-    st.markdown("### Auth Debug")
-    st.json(auth_status_payload())
-
-
-def sync_authenticated_user() -> None:
-    if not google_user_is_logged_in():
-        return
-    email = google_user_value("email").lower()
-    if not email:
-        st.session_state["auth_sync_error"] = "Google 已登入，但沒有回傳 email，請檢查 OAuth scope 是否包含 email。"
-        return
-    st.session_state.pop("auth_sync_error", None)
-    default_role = ROLE_SUPER_ADMIN if email in configured_super_admin_emails() else ROLE_REGISTRANT
-    ensure_user_account(email, default_role)
-    st.session_state["account"] = email
-    st.session_state["account_name"] = google_user_value("name")
-    st.session_state["auth_source"] = "google"
-
-
-def login_with_google() -> None:
-    missing = google_auth_missing_settings()
-    if missing:
-        st.error("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
-        return
-    if google_auth_provider() is None:
-        st.warning("尚未設定 Google 登入 Secrets。")
-        return
-    st.login()
+    ensure_user_account(normalized, normalize_role(credential.role))
+    st.session_state["account"] = normalized
+    st.session_state["account_name"] = normalized
+    st.session_state["auth_source"] = "password"
+    return True, "登入成功。"
 
 
 def logout_current_user() -> None:
     for key in ("account", "account_name", "auth_source"):
         st.session_state.pop(key, None)
     request_page_change("賽事列表")
-    if google_user_is_logged_in() and hasattr(st, "logout"):
-        st.logout()
     st.rerun()
 
 
@@ -2275,7 +2199,7 @@ def render_sidebar() -> str:
                 use_container_width=True,
             )
         st.divider()
-        st.caption("建議使用 Chrome、Edge 或 Safari 開啟，避免內建瀏覽器登入受限。")
+        st.caption("帳號資料與報名資料會綁定目前登入帳號。")
     return st.session_state.get("page", page)
 
 
@@ -2297,95 +2221,59 @@ def render_event_list(events: list[dict], df: pd.DataFrame) -> None:
         st.info("目前暫無開放報名的比賽。")
 
 
-def render_google_login_intro() -> None:
-    app_url = configured_app_url()
-    login_url = f"{app_url}/?page=login" if app_url else ""
+def render_login_box(prefix: str = "login") -> None:
     st.markdown(
         """
         <div class="login-panel">
-            <h2>登入系統</h2>
-            <p>請使用您的 Google 帳號登入，以進行報名作業或管理賽事。</p>
-            <div class="login-browser-note">
-                Google 安全政策不允許在 LINE 或 Facebook 內建瀏覽器直接登入。<br>
-                請點擊畫面右上角或右下角的選單，選擇「以預設瀏覽器開啟」，再使用 Safari、Chrome 或 Edge 登入。
-            </div>
+            <h2>帳號登入</h2>
+            <p>請使用系統帳號與密碼登入。一般報名人可自行建立帳號；最高管理員請使用管理員帳號登入。</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if app_url:
-        st.info("如果 Google 登入後又顯示尚未登入，請直接用原始 Streamlit 網址登入，避免外層網站或內建瀏覽器擋住登入 cookie。")
-        st.markdown(
-            f"""
-            <a class="external-login-link" href="{login_url}" target="_blank" rel="noopener noreferrer">
-                用原始 Streamlit 網址開新分頁登入
-            </a>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.caption(login_url)
 
+    login_tab, register_tab = st.tabs(["登入", "建立帳號"])
 
-def render_login_status_check() -> None:
-    with st.expander("登入狀態檢查", expanded=auth_debug_enabled()):
-        st.caption("這裡只顯示安全診斷資訊，不會顯示 client secret 或 token。")
-        st.json(auth_status_payload())
-        st.markdown(
-            """
-            判讀方式：
-            - `google_user_is_logged_in` 是 `false`：Google 回來後 Streamlit 沒有保存登入 cookie，請改用原始 Streamlit 網址、無痕視窗或系統瀏覽器。
-            - `google_user_is_logged_in` 是 `true` 但 `google_email` 空白：Google OAuth scope 沒有回傳 email。
-            - `configured_redirect_uri` 必須和 Google Cloud「已授權的重新導向 URI」完全一致。
-            """
-        )
+    with login_tab:
+        with st.form(f"{prefix}_password_login_form"):
+            username = st.text_input("帳號", key=f"{prefix}_username", autocomplete="username")
+            password = st.text_input("密碼", type="password", key=f"{prefix}_password", autocomplete="current-password")
+            submitted = st.form_submit_button("登入", use_container_width=True)
 
+        if submitted:
+            ok, message = authenticate_password_account(username, password)
+            if ok:
+                st.success(message)
+                if prefix in {"rules", "registration"} and st.session_state.get("selected_event_name"):
+                    route_to_registration_or_unit_setup()
+                else:
+                    request_page_change("管理後台" if is_admin() else UNIT_PAGE)
+                st.rerun()
+            else:
+                st.error(message)
 
-def render_login_box(prefix: str = "login") -> None:
-    render_google_login_intro()
-    if google_auth_configured():
-        st.button(
-            "G  使用 Google 帳號登入",
-            key=f"{prefix}_google_button",
-            on_click=login_with_google,
-            use_container_width=True,
-        )
-    else:
-        st.button("Google 登入尚未開放", key=f"{prefix}_google_disabled", disabled=True, use_container_width=True)
-        st.warning("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
-        if show_google_auth_setup_details():
-            missing = google_auth_missing_settings()
-            with st.expander("Google 登入設定檢查"):
-                st.write("缺少：" + "、".join(missing))
-                st.code(
-                    """SUPER_ADMIN_EMAILS = "your-email@gmail.com"
+    with register_tab:
+        with st.form(f"{prefix}_register_form"):
+            new_username = st.text_input("建立帳號", key=f"{prefix}_new_username", autocomplete="username")
+            new_password = st.text_input("設定密碼", type="password", key=f"{prefix}_new_password", autocomplete="new-password")
+            confirm_password = st.text_input("再次輸入密碼", type="password", key=f"{prefix}_confirm_password", autocomplete="new-password")
+            register_submitted = st.form_submit_button("建立並登入", use_container_width=True)
 
-[auth]
-redirect_uri = "https://tkd.doubleshot.tech/app/oauth2callback"
-cookie_secret = "replace-with-a-long-random-string"
-client_id = "your-google-client-id.apps.googleusercontent.com"
-client_secret = "your-google-client-secret"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
-""",
-                    language="toml",
-                )
-    if not show_google_auth_setup_details():
-        return
-    with st.expander("本機測試登入", expanded=not google_auth_configured()):
-        account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
-        admin_code = st.text_input("最高管理員代碼（選填）", type="password", key=f"{prefix}_admin_code")
-        if not st.button("使用測試帳號登入", key=f"{prefix}_button", use_container_width=True):
-            return
-        if account.strip():
-            role = ROLE_SUPER_ADMIN if admin_code.strip() == ADMIN_ACCESS_CODE else ROLE_REGISTRANT
-            ensure_user_account(account.strip().lower(), role)
-            st.session_state["account"] = account.strip().lower()
-            st.session_state["auth_source"] = "test"
+        if register_submitted:
+            if new_password != confirm_password:
+                st.error("兩次輸入的密碼不一致。")
+                return
+            ok, message = create_password_account(new_username, new_password)
+            if not ok:
+                st.error(message)
+                return
+            authenticate_password_account(new_username, new_password)
+            st.success(message)
             if prefix in {"rules", "registration"} and st.session_state.get("selected_event_name"):
                 route_to_registration_or_unit_setup()
             else:
-                request_page_change("管理後台" if role == ROLE_SUPER_ADMIN else UNIT_PAGE)
+                request_page_change(UNIT_PAGE)
             st.rerun()
-        st.warning("請輸入 Email。")
 
 
 def render_profile_form(account_email: str, prefix: str = "profile") -> bool:
@@ -2545,7 +2433,7 @@ def render_account_page() -> None:
         return
 
     profile = get_user_profile(account)
-    auth_label = "Google" if st.session_state.get("auth_source") == "google" else "測試登入"
+    auth_label = "帳號密碼"
     st.caption(f"目前登入帳號：{account}｜登入方式：{auth_label}｜權限：{role_label(profile.role if profile else current_role())}")
     render_profile_form(account, "account_page")
 
@@ -3518,9 +3406,9 @@ def render_permission_admin() -> None:
         key="permission-existing-account",
     )
     if selected_existing == "新增帳號":
-        target_email = st.text_input("帳號 Email", key="permission-new-email").strip().lower()
+        target_email = st.text_input("帳號", key="permission-new-email").strip().lower()
     else:
-        st.text_input("帳號 Email", value=selected_existing, disabled=True, key="permission-existing-email")
+        st.text_input("帳號", value=selected_existing, disabled=True, key="permission-existing-email")
         target_email = selected_existing.strip().lower()
     target_profile = get_user_profile(target_email) if target_email else None
     current_role_label = role_label(target_profile.role if target_profile else ROLE_REGISTRANT)
@@ -3541,7 +3429,7 @@ def render_permission_admin() -> None:
     )
     if st.button("儲存權限", key="save-permission", use_container_width=True):
         if not target_email:
-            st.error("請輸入帳號 Email。")
+            st.error("請輸入帳號。")
             return
         selected_role = ROLE_OPTIONS[selected_role_name]
         if target_email == current_account() and selected_role != ROLE_SUPER_ADMIN:
@@ -3651,37 +3539,18 @@ def render_admin(df: pd.DataFrame) -> None:
 
 def render_login() -> None:
     st.markdown("<div class='section-title'>登入介面</div>", unsafe_allow_html=True)
-    render_auth_debug()
-    if st.session_state.get("auth_sync_error"):
-        st.warning(st.session_state["auth_sync_error"])
-    if google_user_is_logged_in() and not st.session_state.get("account"):
-        if st.button("重新同步 Google 登入狀態", key="resync-google-auth", use_container_width=True):
-            sync_authenticated_user()
-            st.rerun()
     if st.session_state.get("account"):
         st.success(f"目前帳號：{st.session_state['account']}")
-        if not is_admin():
-            with st.expander("升級為最高管理員"):
-                admin_code = st.text_input("最高管理員代碼", type="password", key="promote-admin-code")
-                if st.button("確認升級", key="promote-admin-button", use_container_width=True):
-                    if admin_code.strip() == ADMIN_ACCESS_CODE:
-                        set_user_role(st.session_state["account"], ROLE_SUPER_ADMIN)
-                        st.success("已升級為最高管理員。")
-                        request_page_change("管理後台")
-                        st.rerun()
-                    else:
-                        st.error("代碼錯誤。")
+        st.caption(f"權限：{role_label(current_role())}")
         st.button("登出", key="login-page-logout", on_click=logout_current_user, use_container_width=True)
-        render_login_status_check()
         return
 
     render_login_box("login_page")
-    render_login_status_check()
 
 
 def main() -> None:
     inject_styles()
-    sync_authenticated_user()
+    ensure_default_admin_credentials()
     apply_query_page()
     apply_pending_page_change()
     page = render_sidebar()
