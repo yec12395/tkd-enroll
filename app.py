@@ -177,41 +177,8 @@ st.set_page_config(
 )
 
 
-EVENTS = [
-    {
-        "name": "桃園市航空盃跆拳道賽",
-        "city": "桃園市",
-        "status": "熱烈報名中",
-        "date": "2026-07-18",
-        "deadline": "2026-06-25 23:59",
-        "venue": "桃園市立體育館",
-        "host": "桃園市體育總會跆拳道委員會",
-        "fee": 900,
-        "description": "開放對打、品勢、競速踢擊項目，採線上報名與名單匯出作業。",
-    },
-    {
-        "name": "暑期跆拳道挑戰賽",
-        "city": "新北市",
-        "status": "即將開放",
-        "date": "2026-08-09",
-        "deadline": "2026-07-12 23:59",
-        "venue": "新莊體育館",
-        "host": "韻動國際",
-        "fee": 800,
-        "description": "適合初階與進階選手參與，含個人賽與團體推廣賽。",
-    },
-    {
-        "name": "品勢邀請賽",
-        "city": "台中市",
-        "status": "報名已截止",
-        "date": "2026-06-14",
-        "deadline": "2026-05-20 23:59",
-        "venue": "台中市朝馬國民運動中心",
-        "host": "全國品勢推廣協會",
-        "fee": 700,
-        "description": "重視禮儀、技術穩定度與競賽節奏，提供完整核對名單。",
-    },
-]
+EVENTS = []
+EVENT_CLEAR_MARKER = "events-cleared-2026-05-30"
 
 CATEGORIES = {
     "對打": ["國小低年級", "國小中年級", "國小高年級", "國中組", "高中組", "社會組"],
@@ -522,6 +489,8 @@ def google_drive_pdf_embed_url(value: str | None) -> str:
 def seed_default_events() -> None:
     db = SessionLocal()
     try:
+        if not EVENTS:
+            return
         if db.query(CompetitionEvent).count() > 0:
             return
 
@@ -557,6 +526,33 @@ def seed_default_events() -> None:
 
 
 seed_default_events()
+
+
+def clear_existing_events_once() -> None:
+    db = SessionLocal()
+    try:
+        if db.query(SiteAsset).filter(SiteAsset.asset_key == EVENT_CLEAR_MARKER).first():
+            return
+
+        db.query(EventPermission).delete(synchronize_session=False)
+        db.query(EventLevel).delete(synchronize_session=False)
+        db.query(EventGroup).delete(synchronize_session=False)
+        db.query(EventItem).delete(synchronize_session=False)
+        db.query(CompetitionEvent).delete(synchronize_session=False)
+        db.add(
+            SiteAsset(
+                asset_key=EVENT_CLEAR_MARKER,
+                filename="event-clear-marker",
+                content_type="text/plain",
+                data_base64="done",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+clear_existing_events_once()
 
 
 def event_to_dict(event: CompetitionEvent, amount: int = 0) -> dict:
@@ -2475,6 +2471,9 @@ def render_safety_notice_dialog(event_name: str) -> None:
 def render_rules(events: list[dict]) -> None:
     st.markdown("<div class='section-title'>競賽規程</div>", unsafe_allow_html=True)
     event_names = [event["name"] for event in events] or [event["name"] for event in get_events()]
+    if not event_names:
+        st.info("尚未建立賽事。")
+        return
     current_event = st.session_state.get("selected_event_name")
     if current_event and current_event not in event_names and get_event(current_event):
         event_names = [current_event] + event_names
