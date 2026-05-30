@@ -767,6 +767,15 @@ def inject_styles() -> None:
             font-weight: 700;
         }
 
+        [data-testid="stSidebar"] div[role="radiogroup"] label {
+            padding: .55rem .65rem;
+        }
+
+        [data-testid="stSidebar"] div[role="radiogroup"] label p {
+            font-size: 1.08rem !important;
+            font-weight: 850 !important;
+        }
+
         [data-testid="stSidebar"] label:has(input:checked) {
             border-radius: 8px;
             background: var(--soft);
@@ -1698,6 +1707,7 @@ def render_sidebar() -> str:
             pages,
             key="nav_page",
             on_change=select_nav_page,
+            label_visibility="collapsed",
         )
         st.divider()
         if st.session_state.get("account"):
