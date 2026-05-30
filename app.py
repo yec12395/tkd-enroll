@@ -663,6 +663,10 @@ def go_to_account_page() -> None:
     request_page_change(ACCOUNT_PAGE)
 
 
+def go_to_login_page() -> None:
+    request_page_change(LOGIN_PAGE)
+
+
 def go_to_admin_page() -> None:
     request_page_change("管理後台")
 
@@ -1403,8 +1407,50 @@ def google_auth_provider() -> str | None:
     return ""
 
 
+def secret_mapping_value(mapping, key: str):
+    if not mapping:
+        return None
+    try:
+        return mapping.get(key)
+    except Exception:
+        try:
+            return mapping[key]
+        except Exception:
+            return None
+
+
+def google_auth_missing_settings() -> list[str]:
+    missing = []
+    if not hasattr(st, "login"):
+        missing.append("streamlit[auth]")
+        return missing
+
+    auth = read_secret("auth")
+    if not auth:
+        return [
+            "[auth]",
+            "auth.redirect_uri",
+            "auth.cookie_secret",
+            "auth.google.client_id",
+            "auth.google.client_secret",
+            "auth.google.server_metadata_url",
+        ]
+
+    for key in ("redirect_uri", "cookie_secret"):
+        if not secret_mapping_value(auth, key):
+            missing.append(f"auth.{key}")
+
+    google_auth = secret_mapping_value(auth, "google")
+    provider_root = google_auth if google_auth else auth
+    provider_prefix = "auth.google" if google_auth else "auth"
+    for key in ("client_id", "client_secret", "server_metadata_url"):
+        if not secret_mapping_value(provider_root, key):
+            missing.append(f"{provider_prefix}.{key}")
+    return missing
+
+
 def google_auth_configured() -> bool:
-    return google_auth_provider() is not None
+    return google_auth_provider() is not None and not google_auth_missing_settings()
 
 
 def google_user_value(key: str) -> str:
@@ -1441,6 +1487,10 @@ def sync_authenticated_user() -> None:
 
 
 def login_with_google() -> None:
+    missing = google_auth_missing_settings()
+    if missing:
+        st.error("Google 登入尚未完成設定：" + "、".join(missing))
+        return
     provider = google_auth_provider()
     if provider is None:
         st.warning("尚未設定 Google 登入 Secrets。")
@@ -1996,7 +2046,12 @@ def render_sidebar() -> str:
             if not get_user_profile(st.session_state["account"]):
                 st.warning("請先建立聯絡人資料")
         else:
-            st.warning("尚未登入")
+            st.button(
+                "尚未登入，點此登入",
+                key="sidebar-login-button",
+                on_click=go_to_login_page,
+                use_container_width=True,
+            )
         st.divider()
         st.caption("建議使用 Chrome、Edge 或 Safari 開啟，避免內建瀏覽器登入受限。")
     return st.session_state.get("page", page)
@@ -2024,17 +2079,39 @@ def render_login_box(prefix: str = "login") -> None:
     st.markdown(
         """
         <div class="info-panel">
-            <h3>登入後才能進行報名</h3>
-            <p>請使用 Google 帳號登入，系統會用此帳號保存與查詢你的報名資料。</p>
+            <h3>Google 帳號登入</h3>
+            <p>登入後會自動綁定 Google Email，報名資料、單位資料與權限都會依此帳號管理。</p>
             <p class="small-note">LINE 或 Facebook 內建瀏覽器可能會阻擋 Google 登入，建議使用系統瀏覽器開啟。</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
     if google_auth_configured():
-        st.button("使用 Google 登入", key=f"{prefix}_google_button", on_click=login_with_google, use_container_width=True)
+        st.button(
+            "使用 Google 帳號登入",
+            key=f"{prefix}_google_button",
+            on_click=login_with_google,
+            use_container_width=True,
+        )
     else:
-        st.info("尚未設定 Google 登入 Secrets，暫時顯示測試登入。")
+        missing = google_auth_missing_settings()
+        st.warning("Google 登入尚未完成設定，暫時顯示本機測試登入。")
+        with st.expander("查看 Google 登入設定缺少項目"):
+            st.write("缺少：" + "、".join(missing))
+            st.code(
+                """SUPER_ADMIN_EMAILS = "your-email@gmail.com"
+
+[auth]
+redirect_uri = "https://tkd.doubleshot.tech/app/oauth2callback"
+cookie_secret = "replace-with-a-long-random-string"
+
+[auth.google]
+client_id = "your-google-client-id.apps.googleusercontent.com"
+client_secret = "your-google-client-secret"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+""",
+                language="toml",
+            )
     with st.expander("本機測試登入", expanded=not google_auth_configured()):
         account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
         admin_code = st.text_input("最高管理員代碼（選填）", type="password", key=f"{prefix}_admin_code")
@@ -3316,35 +3393,23 @@ def render_admin(df: pd.DataFrame) -> None:
 
 def render_login() -> None:
     st.markdown("<div class='section-title'>登入介面</div>", unsafe_allow_html=True)
-    col1, col2 = st.columns([1.2, 1])
-    with col1:
-        st.markdown(
-            """
-            <div class="info-panel">
-                <h3>Google 帳號登入</h3>
-                <p>登入後會自動綁定 Google Email，報名資料、單位資料與權限都會依此帳號管理。</p>
-                <p class="small-note">LINE 或 Facebook 內建瀏覽器可能會阻擋 Google 登入，建議使用系統瀏覽器開啟。</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col2:
-        if st.session_state.get("account"):
-            st.success(f"目前帳號：{st.session_state['account']}")
-            if not is_admin():
-                with st.expander("升級為最高管理員"):
-                    admin_code = st.text_input("最高管理員代碼", type="password", key="promote-admin-code")
-                    if st.button("確認升級", key="promote-admin-button", use_container_width=True):
-                        if admin_code.strip() == ADMIN_ACCESS_CODE:
-                            set_user_role(st.session_state["account"], ROLE_SUPER_ADMIN)
-                            st.success("已升級為最高管理員。")
-                            request_page_change("管理後台")
-                            st.rerun()
-                        else:
-                            st.error("代碼錯誤。")
-            st.button("登出", key="login-page-logout", on_click=logout_current_user, use_container_width=True)
-        else:
-            render_login_box("login_page")
+    if st.session_state.get("account"):
+        st.success(f"目前帳號：{st.session_state['account']}")
+        if not is_admin():
+            with st.expander("升級為最高管理員"):
+                admin_code = st.text_input("最高管理員代碼", type="password", key="promote-admin-code")
+                if st.button("確認升級", key="promote-admin-button", use_container_width=True):
+                    if admin_code.strip() == ADMIN_ACCESS_CODE:
+                        set_user_role(st.session_state["account"], ROLE_SUPER_ADMIN)
+                        st.success("已升級為最高管理員。")
+                        request_page_change("管理後台")
+                        st.rerun()
+                    else:
+                        st.error("代碼錯誤。")
+        st.button("登出", key="login-page-logout", on_click=logout_current_user, use_container_width=True)
+        return
+
+    render_login_box("login_page")
 
 
 def main() -> None:
