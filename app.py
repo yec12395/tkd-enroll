@@ -213,6 +213,30 @@ NAV_PAGES = ["賽事列表", "我的報名", UNIT_PAGE, LOGIN_PAGE]
 PAGES = NAV_PAGES + ["競賽規程", "線上報名", "管理後台", ACCOUNT_PAGE]
 ADMIN_ONLY_PAGES = {"管理後台"}
 PROFILE_SECTIONS = ["參賽單位", "隊職員名單"]
+PAGE_QUERY_VALUES = {
+    "賽事列表": "events",
+    "我的報名": "my",
+    UNIT_PAGE: "profile",
+    LOGIN_PAGE: "login",
+    "競賽規程": "rules",
+    "線上報名": "register",
+    "管理後台": "admin",
+    ACCOUNT_PAGE: "account",
+}
+QUERY_PAGE_VALUES = {
+    "home": "賽事列表",
+    "events": "賽事列表",
+    "list": "賽事列表",
+    "my": "我的報名",
+    "registrations": "我的報名",
+    "profile": UNIT_PAGE,
+    "unit": UNIT_PAGE,
+    "login": LOGIN_PAGE,
+    "rules": "競賽規程",
+    "register": "線上報名",
+    "admin": "管理後台",
+    "account": ACCOUNT_PAGE,
+}
 
 ROLE_SUPER_ADMIN = "super_admin"
 ROLE_ORGANIZER = "organizer"
@@ -629,11 +653,46 @@ def start_registration(event_name: str) -> None:
     route_to_registration_or_unit_setup(event_name)
 
 
-def request_page_change(page: str) -> None:
+def query_param_value(key: str) -> str | None:
+    try:
+        value = st.query_params.get(key)
+    except Exception:
+        return None
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def set_query_page(page: str) -> None:
+    query_value = PAGE_QUERY_VALUES.get(PAGE_ALIASES.get(page, page))
+    if not query_value:
+        return
+    try:
+        st.query_params["page"] = query_value
+        st.session_state["query_page_seen"] = query_value
+    except Exception:
+        pass
+
+
+def apply_query_page() -> None:
+    query_page = query_param_value("page")
+    if not query_page:
+        return
+    query_page = query_page.strip().lower()
+    page = QUERY_PAGE_VALUES.get(query_page)
+    if not page or st.session_state.get("query_page_seen") == query_page:
+        return
+    st.session_state["query_page_seen"] = query_page
+    request_page_change(page, update_query=False)
+
+
+def request_page_change(page: str, update_query: bool = True) -> None:
     page = PAGE_ALIASES.get(page, page)
     st.session_state["pending_page"] = page
     if page in NAV_PAGES:
         st.session_state["nav_page"] = page
+    if update_query:
+        set_query_page(page)
 
 
 def apply_pending_page_change() -> None:
@@ -657,6 +716,7 @@ def go_home() -> None:
     st.session_state["page"] = "賽事列表"
     st.session_state["nav_page"] = "賽事列表"
     st.session_state.pop("pending_page", None)
+    set_query_page("賽事列表")
 
 
 def go_to_account_page() -> None:
@@ -674,6 +734,7 @@ def go_to_admin_page() -> None:
 def select_nav_page() -> None:
     st.session_state["page"] = st.session_state["nav_page"]
     st.session_state.pop("pending_page", None)
+    set_query_page(st.session_state["page"])
 
 
 def brand_logo_path() -> str | None:
@@ -873,6 +934,60 @@ def inject_styles() -> None:
             display: block;
             color: var(--muted) !important;
             font-size: .82rem;
+        }
+
+        .login-panel {
+            display: grid;
+            gap: 1.1rem;
+            max-width: 760px;
+            margin: 0 auto 1.25rem;
+            padding: 1.65rem;
+            border: 1px solid var(--line);
+            border-left: 5px solid var(--brand);
+            border-radius: 8px;
+            background: #ffffff;
+            box-shadow: var(--shadow);
+        }
+
+        .login-panel h2 {
+            margin: 0;
+            color: var(--navy);
+            font-size: 1.8rem;
+            line-height: 1.25;
+        }
+
+        .login-panel p {
+            margin: 0;
+            color: var(--ink);
+            line-height: 1.75;
+        }
+
+        .login-browser-note {
+            padding: .9rem 1rem;
+            border: 1px solid #f1d6a4;
+            border-radius: 8px;
+            background: #fffaf0;
+            color: #815c13;
+            line-height: 1.75;
+        }
+
+        .login-actions {
+            display: grid;
+            grid-template-columns: 1.1fr .9fr;
+            gap: .75rem;
+            align-items: stretch;
+        }
+
+        .google-wordmark {
+            display: inline-grid;
+            place-items: center;
+            width: 1.45rem;
+            height: 1.45rem;
+            margin-right: .45rem;
+            border-radius: 999px;
+            background: #ffffff;
+            color: #4285f4;
+            font-weight: 900;
         }
 
         .hero {
@@ -1236,7 +1351,8 @@ def inject_styles() -> None:
 
             .hero-stats,
             .card-grid,
-            .summary-strip {
+            .summary-strip,
+            .login-actions {
                 grid-template-columns: 1fr;
             }
         }
@@ -2079,25 +2195,36 @@ def render_event_list(events: list[dict], df: pd.DataFrame) -> None:
         st.info("目前暫無開放報名的比賽。")
 
 
-def render_login_box(prefix: str = "login") -> None:
+def render_google_login_intro() -> None:
     st.markdown(
         """
-        <div class="info-panel">
-            <h3>Google 帳號登入</h3>
-            <p>登入後會自動綁定 Google Email，報名資料、單位資料與權限都會依此帳號管理。</p>
-            <p class="small-note">LINE 或 Facebook 內建瀏覽器可能會阻擋 Google 登入，建議使用系統瀏覽器開啟。</p>
+        <div class="login-panel">
+            <h2>登入系統</h2>
+            <p>請使用您的 Google 帳號登入，以進行報名作業或管理賽事。</p>
+            <div class="login-browser-note">
+                Google 安全政策不允許在 LINE 或 Facebook 內建瀏覽器直接登入。<br>
+                請點擊畫面右上角或右下角的選單，選擇「以預設瀏覽器開啟」，再使用 Safari、Chrome 或 Edge 登入。
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_login_box(prefix: str = "login") -> None:
+    render_google_login_intro()
+    login_col, browse_col = st.columns([1.1, .9])
     if google_auth_configured():
-        st.button(
-            "使用 Google 帳號登入",
-            key=f"{prefix}_google_button",
-            on_click=login_with_google,
-            use_container_width=True,
-        )
+        with login_col:
+            st.button(
+                "G  使用 Google 帳號登入",
+                key=f"{prefix}_google_button",
+                on_click=login_with_google,
+                use_container_width=True,
+            )
     else:
+        with login_col:
+            st.button("Google 登入尚未開放", key=f"{prefix}_google_disabled", disabled=True, use_container_width=True)
         st.warning("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
         if show_google_auth_setup_details():
             missing = google_auth_missing_settings()
@@ -2117,7 +2244,14 @@ server_metadata_url = "https://accounts.google.com/.well-known/openid-configurat
 """,
                     language="toml",
                 )
-    if google_auth_configured() and not show_google_auth_setup_details():
+    with browse_col:
+        st.button(
+            "先去逛逛賽事列表",
+            key=f"{prefix}_browse_button",
+            on_click=go_home,
+            use_container_width=True,
+        )
+    if not show_google_auth_setup_details():
         return
     with st.expander("本機測試登入", expanded=not google_auth_configured()):
         account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
@@ -3422,6 +3556,7 @@ def render_login() -> None:
 def main() -> None:
     inject_styles()
     sync_authenticated_user()
+    apply_query_page()
     apply_pending_page_change()
     page = render_sidebar()
     page = enforce_page_access(page)
