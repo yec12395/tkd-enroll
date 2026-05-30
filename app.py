@@ -971,6 +971,26 @@ def inject_styles() -> None:
             line-height: 1.75;
         }
 
+        .external-login-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 2.75rem;
+            padding: .75rem 1rem;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #ffffff;
+            color: var(--navy) !important;
+            font-weight: 800;
+            text-decoration: none !important;
+            box-shadow: 0 10px 24px rgba(10, 36, 64, .08);
+        }
+
+        .external-login-link:hover {
+            border-color: var(--brand);
+            color: var(--brand) !important;
+        }
+
         .login-actions {
             display: grid;
             grid-template-columns: 1.1fr .9fr;
@@ -2275,7 +2295,15 @@ def render_google_login_intro() -> None:
     )
     if app_url:
         st.info("如果 Google 登入後又顯示尚未登入，請直接用原始 Streamlit 網址登入，避免外層網站或內建瀏覽器擋住登入 cookie。")
-        st.link_button("用原始 Streamlit 網址開啟登入", login_url, use_container_width=True)
+        st.markdown(
+            f"""
+            <a class="external-login-link" href="{login_url}" target="_blank" rel="noopener noreferrer">
+                用原始 Streamlit 網址開新分頁登入
+            </a>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.caption(login_url)
 
 
 def render_login_status_check() -> None:
@@ -2294,18 +2322,15 @@ def render_login_status_check() -> None:
 
 def render_login_box(prefix: str = "login") -> None:
     render_google_login_intro()
-    login_col, browse_col = st.columns([1.1, .9])
     if google_auth_configured():
-        with login_col:
-            st.button(
-                "G  使用 Google 帳號登入",
-                key=f"{prefix}_google_button",
-                on_click=login_with_google,
-                use_container_width=True,
-            )
+        st.button(
+            "G  使用 Google 帳號登入",
+            key=f"{prefix}_google_button",
+            on_click=login_with_google,
+            use_container_width=True,
+        )
     else:
-        with login_col:
-            st.button("Google 登入尚未開放", key=f"{prefix}_google_disabled", disabled=True, use_container_width=True)
+        st.button("Google 登入尚未開放", key=f"{prefix}_google_disabled", disabled=True, use_container_width=True)
         st.warning("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
         if show_google_auth_setup_details():
             missing = google_auth_missing_settings()
@@ -2323,13 +2348,6 @@ server_metadata_url = "https://accounts.google.com/.well-known/openid-configurat
 """,
                     language="toml",
                 )
-    with browse_col:
-        st.button(
-            "先去逛逛賽事列表",
-            key=f"{prefix}_browse_button",
-            on_click=go_home,
-            use_container_width=True,
-        )
     if not show_google_auth_setup_details():
         return
     with st.expander("本機測試登入", expanded=not google_auth_configured()):
