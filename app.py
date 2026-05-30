@@ -1515,12 +1515,7 @@ def google_auth_provider() -> str | None:
     auth = read_secret("auth")
     if not auth or not hasattr(st, "login"):
         return None
-    try:
-        if auth.get("google"):
-            return "google"
-    except Exception:
-        pass
-    return ""
+    return "default"
 
 
 def secret_mapping_value(mapping, key: str):
@@ -1547,21 +1542,18 @@ def google_auth_missing_settings() -> list[str]:
             "[auth]",
             "auth.redirect_uri",
             "auth.cookie_secret",
-            "auth.google.client_id",
-            "auth.google.client_secret",
-            "auth.google.server_metadata_url",
+            "auth.client_id",
+            "auth.client_secret",
+            "auth.server_metadata_url",
         ]
 
     for key in ("redirect_uri", "cookie_secret"):
         if not secret_mapping_value(auth, key):
             missing.append(f"auth.{key}")
 
-    google_auth = secret_mapping_value(auth, "google")
-    provider_root = google_auth if google_auth else auth
-    provider_prefix = "auth.google" if google_auth else "auth"
     for key in ("client_id", "client_secret", "server_metadata_url"):
-        if not secret_mapping_value(provider_root, key):
-            missing.append(f"{provider_prefix}.{key}")
+        if not secret_mapping_value(auth, key):
+            missing.append(f"auth.{key}")
     return missing
 
 
@@ -1611,14 +1603,10 @@ def login_with_google() -> None:
     if missing:
         st.error("Google 登入尚未開放，請稍後再試或聯繫主辦單位。")
         return
-    provider = google_auth_provider()
-    if provider is None:
+    if google_auth_provider() is None:
         st.warning("尚未設定 Google 登入 Secrets。")
         return
-    if provider:
-        st.login(provider)
-    else:
-        st.login()
+    st.login()
 
 
 def logout_current_user() -> None:
