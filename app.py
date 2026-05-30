@@ -21,6 +21,7 @@ from models import (
     EventGroup,
     EventItem,
     EventLevel,
+    LoginSession,
     Registration,
     SiteAsset,
     StaffMember,
@@ -60,6 +61,8 @@ create_database_tables()
 DEFAULT_ADMIN_USERNAME = "yec12395"
 DEFAULT_ADMIN_PASSWORD_HASH = "pbkdf2_sha256$260000$dGtkLWVucm9sbC1hZG1pbi12MQ==$YnIoOx0L1Kc2PngOnBAnv8_NpeOalaRa0SvtRW8bEqQ="
 PASSWORD_HASH_ITERATIONS = 260000
+LOGIN_COOKIE_NAME = "tkd_enroll_session"
+LOGIN_SESSION_DAYS = 14
 
 
 def ensure_registration_schema() -> None:
@@ -1690,22 +1693,140 @@ def ensure_default_admin_credentials() -> None:
         db.close()
 
 
+def hash_login_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def login_session_expiry() -> datetime:
+    return datetime.utcnow() + timedelta(days=LOGIN_SESSION_DAYS)
+
+
+def create_login_session(username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    expires_at = login_session_expiry().strftime("%Y-%m-%d %H:%M:%S")
+    now_text = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    db = SessionLocal()
+    try:
+        db.query(LoginSession).filter(LoginSession.expires_at < now_text).delete(synchronize_session=False)
+        db.add(
+            LoginSession(
+                username=username,
+                token_hash=hash_login_token(token),
+                expires_at=expires_at,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    return token
+
+
+def login_session_username(token: str | None) -> str | None:
+    if not token:
+        return None
+    now_text = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    db = SessionLocal()
+    try:
+        session = db.query(LoginSession).filter(LoginSession.token_hash == hash_login_token(token)).first()
+        if session is None or not session.expires_at or session.expires_at < now_text:
+            return None
+        return session.username
+    finally:
+        db.close()
+
+
+def revoke_login_session(token: str | None) -> None:
+    if not token:
+        return
+    db = SessionLocal()
+    try:
+        db.query(LoginSession).filter(LoginSession.token_hash == hash_login_token(token)).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
+def browser_cookie_token() -> str:
+    try:
+        return str(st.context.cookies.get(LOGIN_COOKIE_NAME, "") or "")
+    except Exception:
+        return ""
+
+
+def cookie_secure_suffix() -> str:
+    try:
+        return "; Secure" if str(st.context.url).startswith("https://") else ""
+    except Exception:
+        return ""
+
+
+def render_login_cookie_scripts() -> bool:
+    if st.session_state.pop("clear_login_cookie", False):
+        components.html(
+            f"""
+            <script>
+            document.cookie = "{LOGIN_COOKIE_NAME}=; Max-Age=0; path=/; SameSite=Lax{cookie_secure_suffix()}";
+            </script>
+            """,
+            height=0,
+        )
+        return True
+
+    token = st.session_state.pop("pending_login_cookie_token", "")
+    if token:
+        max_age = LOGIN_SESSION_DAYS * 24 * 60 * 60
+        components.html(
+            f"""
+            <script>
+            document.cookie = "{LOGIN_COOKIE_NAME}={token}; Max-Age={max_age}; path=/; SameSite=Lax{cookie_secure_suffix()}";
+            </script>
+            """,
+            height=0,
+        )
+    return False
+
+
+def apply_authenticated_account(username: str, role: str, token: str | None = None) -> None:
+    normalized = normalize_username(username)
+    ensure_user_account(normalized, normalize_role(role))
+    st.session_state["account"] = normalized
+    st.session_state["account_name"] = normalized
+    st.session_state["auth_source"] = "password"
+    if token:
+        st.session_state["login_token"] = token
+
+
+def restore_login_from_cookie() -> None:
+    if st.session_state.get("account"):
+        return
+    token = st.session_state.get("login_token") or browser_cookie_token()
+    username = login_session_username(token)
+    if not username:
+        return
+    credential = get_account_credential(username)
+    if credential is None:
+        revoke_login_session(token)
+        return
+    apply_authenticated_account(username, credential.role, token)
+
+
 def authenticate_password_account(username: str, password: str) -> tuple[bool, str]:
     normalized = normalize_username(username)
     credential = get_account_credential(normalized)
     if not credential or not verify_password(password, credential.password_hash):
         return False, "帳號或密碼錯誤。"
 
-    ensure_user_account(normalized, normalize_role(credential.role))
-    st.session_state["account"] = normalized
-    st.session_state["account_name"] = normalized
-    st.session_state["auth_source"] = "password"
+    token = create_login_session(normalized)
+    apply_authenticated_account(normalized, credential.role, token)
+    st.session_state["pending_login_cookie_token"] = token
     return True, "登入成功。"
 
 
 def logout_current_user() -> None:
-    for key in ("account", "account_name", "auth_source"):
+    revoke_login_session(st.session_state.get("login_token") or browser_cookie_token())
+    for key in ("account", "account_name", "auth_source", "login_token", "pending_login_cookie_token"):
         st.session_state.pop(key, None)
+    st.session_state["clear_login_cookie"] = True
     request_page_change("賽事列表")
     st.rerun()
 
@@ -3630,6 +3751,8 @@ def render_login() -> None:
 def main() -> None:
     inject_styles()
     ensure_default_admin_credentials()
+    if not render_login_cookie_scripts():
+        restore_login_from_cookie()
     apply_query_page()
     apply_pending_page_change()
     page = render_sidebar()

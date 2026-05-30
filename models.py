@@ -54,6 +54,15 @@ class AccountCredential(Base):
     role = Column(String, default="registrant")
 
 
+class LoginSession(Base):
+    __tablename__ = "login_sessions"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, index=True)
+    token_hash = Column(String, unique=True, index=True)
+    expires_at = Column(String)
+
+
 class SiteAsset(Base):
     __tablename__ = "site_assets"
 
