@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+import base64
 from html import escape
 from io import BytesIO
 import os
@@ -14,6 +15,7 @@ from models import (
     EventItem,
     EventLevel,
     Registration,
+    SiteAsset,
     StaffMember,
     TeamUnit,
     UserProfile,
@@ -395,6 +397,23 @@ def format_event_date_range(value: str | None) -> str:
     return f"{start.isoformat()}~{end.isoformat()}"
 
 
+def format_public_event_date(value: str | None) -> str:
+    parsed_dates = [parse_dateish(item) for item in split_event_dates(value)]
+    parsed_dates = sorted(item for item in parsed_dates if item is not None)
+    if not parsed_dates:
+        return format_event_dates(value)
+
+    start = parsed_dates[0]
+    end = parsed_dates[-1]
+    if start == end:
+        return f"{start.month}/{start.day}"
+    if start.year == end.year and start.month == end.month:
+        return f"{start.month}/{start.day}-{end.day}"
+    if start.year == end.year:
+        return f"{start.month}/{start.day}-{end.month}/{end.day}"
+    return f"{start.year}/{start.month}/{start.day}-{end.year}/{end.month}/{end.day}"
+
+
 def google_drive_pdf_embed_url(value: str | None) -> str:
     if not value:
         return ""
@@ -634,6 +653,71 @@ def brand_logo_path() -> str | None:
     return None
 
 
+IMAGE_UPLOAD_TYPES = ["png", "jpg", "jpeg", "webp", "svg"]
+
+
+def uploaded_image_content_type(uploaded_file) -> str:
+    if uploaded_file.type and uploaded_file.type.startswith("image/"):
+        return uploaded_file.type
+    extension = os.path.splitext(uploaded_file.name.lower())[1].lstrip(".")
+    return {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+    }.get(extension, "application/octet-stream")
+
+
+def get_site_asset(asset_key: str) -> dict | None:
+    db = SessionLocal()
+    try:
+        asset = db.query(SiteAsset).filter(SiteAsset.asset_key == asset_key).first()
+        if asset is None:
+            return None
+        return {
+            "filename": asset.filename or "",
+            "content_type": asset.content_type or "image/png",
+            "data_base64": asset.data_base64 or "",
+        }
+    finally:
+        db.close()
+
+
+def site_asset_data_uri(asset_key: str) -> str | None:
+    asset = get_site_asset(asset_key)
+    if not asset or not asset["data_base64"]:
+        return None
+    return f"data:{asset['content_type']};base64,{asset['data_base64']}"
+
+
+def save_site_asset(asset_key: str, uploaded_file) -> None:
+    encoded_data = base64.b64encode(uploaded_file.getvalue()).decode("ascii")
+    db = SessionLocal()
+    try:
+        asset = db.query(SiteAsset).filter(SiteAsset.asset_key == asset_key).first()
+        if asset is None:
+            asset = SiteAsset(asset_key=asset_key)
+            db.add(asset)
+        asset.filename = uploaded_file.name
+        asset.content_type = uploaded_image_content_type(uploaded_file)
+        asset.data_base64 = encoded_data
+        db.commit()
+    finally:
+        db.close()
+
+
+def delete_site_asset(asset_key: str) -> None:
+    db = SessionLocal()
+    try:
+        asset = db.query(SiteAsset).filter(SiteAsset.asset_key == asset_key).first()
+        if asset is not None:
+            db.delete(asset)
+            db.commit()
+    finally:
+        db.close()
+
+
 def inject_styles() -> None:
     st.markdown(
         """
@@ -707,7 +791,10 @@ def inject_styles() -> None:
         }
 
         .sidebar-logo {
-            max-width: 92px;
+            display: block;
+            max-width: 96px;
+            max-height: 96px;
+            object-fit: contain;
             margin: .85rem 0 .4rem;
         }
 
@@ -823,16 +910,16 @@ def inject_styles() -> None:
         .event-card {
             position: relative;
             padding: 1.15rem;
-            min-height: 268px;
+            min-height: 214px;
             box-shadow: var(--shadow);
             border-top: 4px solid var(--brand);
         }
 
         .event-card h3 {
-            margin: .85rem 0 .55rem;
+            margin: .95rem 0 .8rem;
             color: var(--navy);
-            font-size: 1.18rem;
-            line-height: 1.35;
+            font-size: 1.42rem;
+            line-height: 1.28;
         }
 
         .event-card p {
@@ -847,7 +934,7 @@ def inject_styles() -> None:
         .event-meta {
             display: grid;
             gap: .35rem;
-            margin-top: .85rem;
+            margin-top: 1rem;
             padding-top: .85rem;
             border-top: 1px solid var(--line);
         }
@@ -1105,6 +1192,22 @@ def inject_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
+    background_uri = site_asset_data_uri("site_background")
+    if background_uri:
+        st.markdown(
+            f"""
+            <style>
+            .hero {{
+                background:
+                    linear-gradient(90deg, rgba(13, 24, 38, .92) 0%, rgba(23, 50, 77, .76) 52%, rgba(200, 32, 47, .62) 100%),
+                    url("{background_uri}");
+                background-size: cover;
+                background-position: center;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def db_to_dataframe(account_email: str | None = None, include_all: bool = False) -> pd.DataFrame:
@@ -1437,6 +1540,69 @@ def delete_event_level(level_id: int) -> None:
         db.close()
 
 
+def render_site_asset_preview(asset_key: str, label: str, cover: bool = False) -> None:
+    asset = get_site_asset(asset_key)
+    if asset is None:
+        st.caption(f"尚未上傳{label}。")
+        return
+
+    image_uri = site_asset_data_uri(asset_key)
+    if image_uri:
+        fit = "cover" if cover else "contain"
+        height = 150 if cover else 96
+        st.markdown(
+            f"""
+            <div class="small-note">目前檔案：{escape(asset['filename'])}</div>
+            <img src="{image_uri}" alt="{escape(label)}"
+                 style="width:100%;height:{height}px;object-fit:{fit};border:1px solid #e3e7ed;border-radius:8px;background:#fff;padding:.4rem;">
+            """,
+            unsafe_allow_html=True,
+        )
+    if st.button(f"移除{label}", key=f"delete-{asset_key}", use_container_width=True):
+        delete_site_asset(asset_key)
+        st.success(f"{label}已移除。")
+        st.rerun()
+
+
+def render_site_asset_upload_box(asset_key: str, label: str, help_text: str, cover: bool = False) -> None:
+    st.markdown(f"#### {label}")
+    render_site_asset_preview(asset_key, label, cover)
+    uploaded_file = st.file_uploader(
+        f"上傳{label}",
+        type=IMAGE_UPLOAD_TYPES,
+        key=f"upload-{asset_key}",
+        help=help_text,
+    )
+    if st.button(
+        f"儲存{label}",
+        key=f"save-{asset_key}",
+        disabled=uploaded_file is None,
+        use_container_width=True,
+    ):
+        save_site_asset(asset_key, uploaded_file)
+        st.success(f"{label}已更新。")
+        st.rerun()
+
+
+def render_site_asset_admin() -> None:
+    st.subheader("網站視覺設定")
+    st.caption("上傳後會立即套用在側邊欄 LOGO 與首頁背景。建議 LOGO 使用透明 PNG，背景圖使用橫式照片。")
+    col_logo, col_background = st.columns(2)
+    with col_logo:
+        render_site_asset_upload_box(
+            "site_logo",
+            "網站 LOGO",
+            "支援 PNG、JPG、WEBP、SVG。",
+        )
+    with col_background:
+        render_site_asset_upload_box(
+            "site_background",
+            "首頁背景圖片",
+            "建議使用 1600px 以上的橫式圖片。",
+            cover=True,
+        )
+
+
 def event_status_class(status: str) -> str:
     if status == "熱烈報名中":
         return "hot"
@@ -1450,17 +1616,16 @@ def render_event_cards(events: list[dict]) -> None:
         cols = st.columns(3)
         for col, event in zip(cols, events[row_start : row_start + 3]):
             with col:
+                event_date = format_public_event_date(event.get("date_raw") or event.get("date"))
                 st.markdown(
                     f"""
                     <div class="event-card">
-                        <span class="badge {event_status_class(event['status'])}">{event['status']}</span>
-                        <h3>{event['name']}</h3>
-                        <p class="event-description">{event['description']}</p>
+                        <span class="badge {event_status_class(event['status'])}">{escape(event['status'])}</span>
+                        <h3>{escape(event['name'])}</h3>
                         <div class="event-meta">
-                            <div><span>比賽日期</span><strong>{event['date']}</strong></div>
-                            <div><span>比賽地點</span><strong>{event['venue']}</strong></div>
-                            <div><span>報名截止</span><strong>{event['deadline']}</strong></div>
-                            <div><span>報名費用</span><strong>NT${event['fee']:,}</strong></div>
+                            <div><span>比賽日期</span><strong>{escape(event_date)}</strong></div>
+                            <div><span>比賽地點</span><strong>{escape(event['venue'])}</strong></div>
+                            <div><span>報名截止日期</span><strong>{escape(event['deadline'])}</strong></div>
                         </div>
                     </div>
                     """,
@@ -1493,9 +1658,16 @@ def render_hero(df: pd.DataFrame) -> None:
 
 def render_sidebar() -> str:
     with st.sidebar:
-        logo_path = brand_logo_path()
-        if logo_path:
-            st.image(logo_path, width=96)
+        logo_uri = site_asset_data_uri("site_logo")
+        if logo_uri:
+            st.markdown(
+                f'<img class="sidebar-logo" src="{logo_uri}" alt="網站 LOGO">',
+                unsafe_allow_html=True,
+            )
+        else:
+            logo_path = brand_logo_path()
+            if logo_path:
+                st.image(logo_path, width=96)
         st.markdown(
             """
             <div class="sidebar-brand">
@@ -2470,6 +2642,9 @@ def render_event_hierarchy_tree(event_name: str) -> None:
 
 
 def render_event_admin() -> None:
+    render_site_asset_admin()
+    st.divider()
+
     st.subheader("新增賽事")
     with st.form("add_event_form", clear_on_submit=True):
         name = st.text_input("賽事名稱 *")

@@ -2,6 +2,7 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy import Text
 
 from database import Base
 
@@ -42,6 +43,16 @@ class UserProfile(Base):
     name = Column(String)
     phone = Column(String)
     role = Column(String, default="coach")
+
+
+class SiteAsset(Base):
+    __tablename__ = "site_assets"
+
+    id = Column(Integer, primary_key=True)
+    asset_key = Column(String, unique=True, index=True)
+    filename = Column(String)
+    content_type = Column(String)
+    data_base64 = Column(Text)
 
 
 class TeamUnit(Base):
