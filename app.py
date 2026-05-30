@@ -1565,10 +1565,31 @@ def show_google_auth_setup_details() -> bool:
     return is_admin() or os.getenv("SHOW_AUTH_SETUP") == "1"
 
 
-def google_user_value(key: str) -> str:
+def streamlit_user_info() -> dict:
     user = getattr(st, "user", None)
     if user is None:
-        return ""
+        return {}
+
+    try:
+        info = user.to_dict()
+    except Exception:
+        try:
+            info = dict(user)
+        except Exception:
+            info = {}
+
+    try:
+        info.setdefault("is_logged_in", getattr(user, "is_logged_in"))
+    except Exception:
+        pass
+    return info
+
+
+def google_user_value(key: str) -> str:
+    info = streamlit_user_info()
+    if key in info and info[key]:
+        return str(info[key]).strip()
+    user = getattr(st, "user", None)
     try:
         return str(getattr(user, key, "") or user.get(key, "") or "").strip()
     except Exception:
@@ -1576,13 +1597,38 @@ def google_user_value(key: str) -> str:
 
 
 def google_user_is_logged_in() -> bool:
+    info = streamlit_user_info()
+    if "is_logged_in" in info:
+        return bool(info["is_logged_in"])
     user = getattr(st, "user", None)
-    if user is None:
-        return False
     try:
         return bool(getattr(user, "is_logged_in", False))
     except Exception:
         return False
+
+
+def auth_debug_enabled() -> bool:
+    return query_param_value("debug_auth") == "1" or os.getenv("SHOW_AUTH_DEBUG") == "1"
+
+
+def render_auth_debug() -> None:
+    if not auth_debug_enabled():
+        return
+    st.markdown("### Auth Debug")
+    safe_info = {
+        key: ("***" if "token" in key.lower() else value)
+        for key, value in streamlit_user_info().items()
+        if key != "tokens"
+    }
+    st.json(
+        {
+            "st_user": safe_info,
+            "google_user_is_logged_in": google_user_is_logged_in(),
+            "google_email": google_user_value("email"),
+            "session_account": st.session_state.get("account"),
+            "auth_source": st.session_state.get("auth_source"),
+        }
+    )
 
 
 def sync_authenticated_user() -> None:
@@ -1590,7 +1636,9 @@ def sync_authenticated_user() -> None:
         return
     email = google_user_value("email").lower()
     if not email:
+        st.session_state["auth_sync_error"] = "Google 已登入，但沒有回傳 email，請檢查 OAuth scope 是否包含 email。"
         return
+    st.session_state.pop("auth_sync_error", None)
     default_role = ROLE_SUPER_ADMIN if email in configured_super_admin_emails() else ROLE_REGISTRANT
     ensure_user_account(email, default_role)
     st.session_state["account"] = email
@@ -3520,6 +3568,13 @@ def render_admin(df: pd.DataFrame) -> None:
 
 def render_login() -> None:
     st.markdown("<div class='section-title'>登入介面</div>", unsafe_allow_html=True)
+    render_auth_debug()
+    if st.session_state.get("auth_sync_error"):
+        st.warning(st.session_state["auth_sync_error"])
+    if google_user_is_logged_in() and not st.session_state.get("account"):
+        if st.button("重新同步 Google 登入狀態", key="resync-google-auth", use_container_width=True):
+            sync_authenticated_user()
+            st.rerun()
     if st.session_state.get("account"):
         st.success(f"目前帳號：{st.session_state['account']}")
         if not is_admin():
