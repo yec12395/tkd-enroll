@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+competition.db
+streamlit-*.log
+streamlit-*.err.log
+.streamlit/secrets.toml

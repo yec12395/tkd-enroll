@@ -11,6 +11,7 @@ import streamlit.components.v1 as components
 from database import Base, SessionLocal, engine
 from models import (
     CompetitionEvent,
+    EventPermission,
     EventGroup,
     EventItem,
     EventLevel,
@@ -212,6 +213,44 @@ NAV_PAGES = ["賽事列表", "我的報名", UNIT_PAGE, LOGIN_PAGE]
 PAGES = NAV_PAGES + ["競賽規程", "線上報名", "管理後台", ACCOUNT_PAGE]
 ADMIN_ONLY_PAGES = {"管理後台"}
 PROFILE_SECTIONS = ["參賽單位", "隊職員名單"]
+
+ROLE_SUPER_ADMIN = "super_admin"
+ROLE_ORGANIZER = "organizer"
+ROLE_REGISTRANT = "registrant"
+ROLE_LEGACY_ADMIN = "admin"
+ROLE_LEGACY_COACH = "coach"
+ROLE_LABELS = {
+    ROLE_SUPER_ADMIN: "最高管理員",
+    ROLE_ORGANIZER: "主辦單位",
+    ROLE_REGISTRANT: "報名人",
+    ROLE_LEGACY_ADMIN: "最高管理員",
+    ROLE_LEGACY_COACH: "報名人",
+}
+ROLE_OPTIONS = {
+    "最高管理員": ROLE_SUPER_ADMIN,
+    "主辦單位": ROLE_ORGANIZER,
+    "報名人": ROLE_REGISTRANT,
+}
+REGISTRATION_COLUMNS = [
+    "編號",
+    "帳號",
+    "賽事",
+    "選手姓名",
+    "報名單位",
+    "領隊",
+    "教練",
+    "管理",
+    "性別",
+    "出生年月日",
+    "項目",
+    "組別",
+    "級別",
+    "金額",
+    "繳費狀態",
+    "匯款後五碼",
+    "備註",
+    "電話",
+]
 
 
 def parse_dateish(value: str | None) -> date | None:
@@ -1219,11 +1258,19 @@ def inject_styles() -> None:
         )
 
 
-def db_to_dataframe(account_email: str | None = None, include_all: bool = False) -> pd.DataFrame:
+def db_to_dataframe(
+    account_email: str | None = None,
+    include_all: bool = False,
+    event_names: list[str] | None = None,
+) -> pd.DataFrame:
     db = SessionLocal()
     try:
         query = db.query(Registration)
-        if account_email and not include_all:
+        if include_all and event_names is not None:
+            if not event_names:
+                return pd.DataFrame(columns=REGISTRATION_COLUMNS)
+            query = query.filter(Registration.event_name.in_(event_names))
+        elif account_email and not include_all:
             query = query.filter(Registration.account_email == account_email)
         registrations = query.order_by(Registration.id.desc()).all()
         rows = [
@@ -1249,7 +1296,7 @@ def db_to_dataframe(account_email: str | None = None, include_all: bool = False)
             }
             for item in registrations
         ]
-        return pd.DataFrame(rows)
+        return pd.DataFrame(rows, columns=REGISTRATION_COLUMNS)
     finally:
         db.close()
 
@@ -1265,14 +1312,36 @@ def current_account() -> str | None:
     return st.session_state.get("account")
 
 
+def normalize_role(role: str | None) -> str:
+    if role == ROLE_LEGACY_ADMIN:
+        return ROLE_SUPER_ADMIN
+    if role == ROLE_LEGACY_COACH or not role:
+        return ROLE_REGISTRANT
+    if role in {ROLE_SUPER_ADMIN, ROLE_ORGANIZER, ROLE_REGISTRANT}:
+        return role
+    return ROLE_REGISTRANT
+
+
+def role_label(role: str | None) -> str:
+    return ROLE_LABELS.get(normalize_role(role), "報名人")
+
+
 def current_role() -> str:
     account = current_account()
     profile = get_user_profile(account)
-    return (profile.role if profile and profile.role else "coach")
+    return normalize_role(profile.role if profile else None)
 
 
 def is_admin() -> bool:
-    return current_role() == "admin"
+    return current_role() == ROLE_SUPER_ADMIN
+
+
+def is_organizer() -> bool:
+    return current_role() == ROLE_ORGANIZER
+
+
+def can_access_admin_backend() -> bool:
+    return current_role() in {ROLE_SUPER_ADMIN, ROLE_ORGANIZER}
 
 
 def visible_pages() -> list[str]:
@@ -1280,7 +1349,7 @@ def visible_pages() -> list[str]:
 
 
 def can_access_page(page: str) -> bool:
-    return page not in ADMIN_ONLY_PAGES or is_admin()
+    return page not in ADMIN_ONLY_PAGES or can_access_admin_backend()
 
 
 def enforce_page_access(page: str) -> str:
@@ -1289,21 +1358,120 @@ def enforce_page_access(page: str) -> str:
 
     st.session_state["page"] = "賽事列表"
     st.session_state.pop("pending_page", None)
-    st.warning("管理後台僅限管理員使用，已為你切回賽事列表。")
+    st.warning("管理後台僅限最高管理員與主辦單位使用，已為你切回賽事列表。")
     return "賽事列表"
 
 
-def ensure_user_account(account_email: str, role: str = "coach") -> None:
+def read_secret(*keys):
+    try:
+        value = st.secrets
+        for key in keys:
+            value = value[key]
+        return value
+    except Exception:
+        return None
+
+
+def parse_email_list(value) -> set[str]:
+    if not value:
+        return set()
+    if isinstance(value, str):
+        parts = value.replace("\n", ",").split(",")
+    else:
+        parts = list(value)
+    return {str(item).strip().lower() for item in parts if str(item).strip()}
+
+
+def configured_super_admin_emails() -> set[str]:
+    emails = set()
+    for secret_path in (("SUPER_ADMIN_EMAILS",), ("ADMIN_EMAILS",), ("app", "super_admin_emails")):
+        emails.update(parse_email_list(read_secret(*secret_path)))
+    emails.update(parse_email_list(os.getenv("SUPER_ADMIN_EMAILS")))
+    emails.update(parse_email_list(os.getenv("ADMIN_EMAILS")))
+    return emails
+
+
+def google_auth_provider() -> str | None:
+    auth = read_secret("auth")
+    if not auth or not hasattr(st, "login"):
+        return None
+    try:
+        if auth.get("google"):
+            return "google"
+    except Exception:
+        pass
+    return ""
+
+
+def google_auth_configured() -> bool:
+    return google_auth_provider() is not None
+
+
+def google_user_value(key: str) -> str:
+    user = getattr(st, "user", None)
+    if user is None:
+        return ""
+    try:
+        return str(getattr(user, key, "") or user.get(key, "") or "").strip()
+    except Exception:
+        return str(getattr(user, key, "") or "").strip()
+
+
+def google_user_is_logged_in() -> bool:
+    user = getattr(st, "user", None)
+    if user is None:
+        return False
+    try:
+        return bool(getattr(user, "is_logged_in", False))
+    except Exception:
+        return False
+
+
+def sync_authenticated_user() -> None:
+    if not google_user_is_logged_in():
+        return
+    email = google_user_value("email").lower()
+    if not email:
+        return
+    default_role = ROLE_SUPER_ADMIN if email in configured_super_admin_emails() else ROLE_REGISTRANT
+    ensure_user_account(email, default_role)
+    st.session_state["account"] = email
+    st.session_state["account_name"] = google_user_value("name")
+    st.session_state["auth_source"] = "google"
+
+
+def login_with_google() -> None:
+    provider = google_auth_provider()
+    if provider is None:
+        st.warning("尚未設定 Google 登入 Secrets。")
+        return
+    if provider:
+        st.login(provider)
+    else:
+        st.login()
+
+
+def logout_current_user() -> None:
+    for key in ("account", "account_name", "auth_source"):
+        st.session_state.pop(key, None)
+    request_page_change("賽事列表")
+    if google_user_is_logged_in() and hasattr(st, "logout"):
+        st.logout()
+    st.rerun()
+
+
+def ensure_user_account(account_email: str, role: str = ROLE_REGISTRANT) -> None:
+    normalized_role = normalize_role(role)
     db = SessionLocal()
     try:
         profile = db.query(UserProfile).filter(UserProfile.account_email == account_email).first()
         if profile is None:
-            profile = UserProfile(account_email=account_email, role=role)
+            profile = UserProfile(account_email=account_email, role=normalized_role)
             db.add(profile)
-        elif role == "admin":
-            profile.role = "admin"
-        elif not profile.role:
-            profile.role = "coach"
+        else:
+            profile.role = normalize_role(profile.role)
+            if normalized_role == ROLE_SUPER_ADMIN:
+                profile.role = ROLE_SUPER_ADMIN
         db.commit()
     finally:
         db.close()
@@ -1317,6 +1485,97 @@ def get_user_profile(account_email: str | None) -> UserProfile | None:
         return db.query(UserProfile).filter(UserProfile.account_email == account_email).first()
     finally:
         db.close()
+
+
+def get_user_profiles() -> list[UserProfile]:
+    db = SessionLocal()
+    try:
+        return db.query(UserProfile).order_by(UserProfile.account_email.asc()).all()
+    finally:
+        db.close()
+
+
+def set_user_role(account_email: str, role: str) -> None:
+    normalized_role = normalize_role(role)
+    db = SessionLocal()
+    try:
+        profile = db.query(UserProfile).filter(UserProfile.account_email == account_email).first()
+        if profile is None:
+            profile = UserProfile(account_email=account_email, role=normalized_role)
+            db.add(profile)
+        else:
+            profile.role = normalized_role
+        db.commit()
+    finally:
+        db.close()
+
+
+def get_event_permissions(account_email: str) -> list[EventPermission]:
+    db = SessionLocal()
+    try:
+        return (
+            db.query(EventPermission)
+            .filter(
+                EventPermission.account_email == account_email,
+                EventPermission.permission_role == ROLE_ORGANIZER,
+            )
+            .order_by(EventPermission.event_id.asc())
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def set_event_permissions(account_email: str, event_ids: list[int]) -> None:
+    db = SessionLocal()
+    try:
+        db.query(EventPermission).filter(EventPermission.account_email == account_email).delete()
+        for event_id in event_ids:
+            db.add(
+                EventPermission(
+                    account_email=account_email,
+                    event_id=event_id,
+                    permission_role=ROLE_ORGANIZER,
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+
+def organizer_event_names(account_email: str | None = None) -> list[str]:
+    account = account_email or current_account()
+    if not account:
+        return []
+    db = SessionLocal()
+    try:
+        permissions = (
+            db.query(EventPermission, CompetitionEvent)
+            .join(CompetitionEvent, EventPermission.event_id == CompetitionEvent.id)
+            .filter(
+                EventPermission.account_email == account,
+                EventPermission.permission_role == ROLE_ORGANIZER,
+            )
+            .order_by(CompetitionEvent.id.desc())
+            .all()
+        )
+        return [event.name for _, event in permissions]
+    finally:
+        db.close()
+
+
+def admin_visible_event_names() -> list[str] | None:
+    if is_admin():
+        return None
+    if is_organizer():
+        return organizer_event_names()
+    return []
+
+
+def can_manage_registration_event(event_name: str) -> bool:
+    if is_admin():
+        return True
+    return is_organizer() and event_name in organizer_event_names()
 
 
 def get_team_units(account_email: str | None) -> list[TeamUnit]:
@@ -1361,10 +1620,12 @@ def save_user_profile(account_email: str, name: str, phone: str) -> None:
     try:
         profile = db.query(UserProfile).filter(UserProfile.account_email == account_email).first()
         if profile is None:
-            profile = UserProfile(account_email=account_email, role="coach")
+            profile = UserProfile(account_email=account_email, role=ROLE_REGISTRANT)
             db.add(profile)
         elif not profile.role:
-            profile.role = "coach"
+            profile.role = ROLE_REGISTRANT
+        else:
+            profile.role = normalize_role(profile.role)
         profile.name = name
         profile.phone = phone
         db.commit()
@@ -1711,21 +1972,27 @@ def render_sidebar() -> str:
         )
         st.divider()
         if st.session_state.get("account"):
-            role_label = "管理員" if is_admin() else "教練"
-            st.success(f"已登入（{role_label}）")
+            profile = get_user_profile(st.session_state["account"])
+            st.success(f"已登入（{role_label(profile.role if profile else current_role())}）")
             st.button(
                 f"帳號：{st.session_state['account']}",
                 key="sidebar-account-button",
                 on_click=go_to_account_page,
                 use_container_width=True,
             )
-            if is_admin():
+            if can_access_admin_backend():
                 st.button(
                     "管理後台",
                     key="sidebar-admin-button",
                     on_click=go_to_admin_page,
                     use_container_width=True,
                 )
+            st.button(
+                "登出",
+                key="sidebar-logout-button",
+                on_click=logout_current_user,
+                use_container_width=True,
+            )
             if not get_user_profile(st.session_state["account"]):
                 st.warning("請先建立聯絡人資料")
         else:
@@ -1758,21 +2025,30 @@ def render_login_box(prefix: str = "login") -> None:
         """
         <div class="info-panel">
             <h3>登入後才能進行報名</h3>
-            <p>請先登入帳號，系統會用此帳號保存與查詢你的報名資料。</p>
-            <p class="small-note">正式上線時可改串 Google OAuth；目前先用 Email 作為測試登入。</p>
+            <p>請使用 Google 帳號登入，系統會用此帳號保存與查詢你的報名資料。</p>
+            <p class="small-note">LINE 或 Facebook 內建瀏覽器可能會阻擋 Google 登入，建議使用系統瀏覽器開啟。</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
-    if st.button("登入", key=f"{prefix}_button", use_container_width=True):
+    if google_auth_configured():
+        st.button("使用 Google 登入", key=f"{prefix}_google_button", on_click=login_with_google, use_container_width=True)
+    else:
+        st.info("尚未設定 Google 登入 Secrets，暫時顯示測試登入。")
+    with st.expander("本機測試登入", expanded=not google_auth_configured()):
+        account = st.text_input("Email", placeholder="demo@example.com", key=f"{prefix}_email")
+        admin_code = st.text_input("最高管理員代碼（選填）", type="password", key=f"{prefix}_admin_code")
+        if not st.button("使用測試帳號登入", key=f"{prefix}_button", use_container_width=True):
+            return
         if account.strip():
-            ensure_user_account(account.strip(), "coach")
-            st.session_state["account"] = account.strip()
+            role = ROLE_SUPER_ADMIN if admin_code.strip() == ADMIN_ACCESS_CODE else ROLE_REGISTRANT
+            ensure_user_account(account.strip().lower(), role)
+            st.session_state["account"] = account.strip().lower()
+            st.session_state["auth_source"] = "test"
             if prefix in {"rules", "registration"} and st.session_state.get("selected_event_name"):
                 route_to_registration_or_unit_setup()
             else:
-                request_page_change(UNIT_PAGE)
+                request_page_change("管理後台" if role == ROLE_SUPER_ADMIN else UNIT_PAGE)
             st.rerun()
         st.warning("請輸入 Email。")
 
@@ -1933,7 +2209,9 @@ def render_account_page() -> None:
         render_login_box("account_page")
         return
 
-    st.caption(f"目前登入帳號：{account}")
+    profile = get_user_profile(account)
+    auth_label = "Google" if st.session_state.get("auth_source") == "google" else "測試登入"
+    st.caption(f"目前登入帳號：{account}｜登入方式：{auth_label}｜權限：{role_label(profile.role if profile else current_role())}")
     render_profile_form(account, "account_page")
 
 
@@ -2774,15 +3052,202 @@ def render_event_admin() -> None:
     render_event_hierarchy_tree(selected_event["name"])
 
 
-def render_admin(df: pd.DataFrame) -> None:
-    st.markdown("<div class='section-title'>管理後台</div>", unsafe_allow_html=True)
-    if not is_admin():
-        st.error("此頁僅限後台管理員使用。")
+def update_registration_record(registration_id: int, fields: dict[str, str | int]) -> bool:
+    db = SessionLocal()
+    try:
+        registration = db.query(Registration).filter(Registration.id == registration_id).first()
+        if registration is None or not can_manage_registration_event(registration.event_name):
+            return False
+        registration.team_name = str(fields["team_name"])
+        registration.athlete_name = str(fields["athlete_name"])
+        registration.gender = str(fields["gender"])
+        registration.birth_date = str(fields["birth_date"])
+        registration.category = str(fields["category"])
+        registration.group_name = str(fields["group_name"])
+        registration.rank_level = str(fields["rank_level"])
+        registration.level = f"{fields['group_name']} / {fields['rank_level']}"
+        registration.item_amount = int(fields["item_amount"])
+        registration.leader_name = str(fields["leader_name"])
+        registration.coach_name = str(fields["coach_name"])
+        registration.manager_name = str(fields["manager_name"])
+        registration.phone = str(fields["phone"])
+        registration.note = str(fields["note"])
+        registration.payment_status = str(fields["payment_status"])
+        registration.pay_five_digits = str(fields["pay_five_digits"])
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def render_admin_registration_editor(view: pd.DataFrame) -> None:
+    if view.empty:
         return
 
+    st.markdown("### 修改選手與單位資料")
+    row_options = {
+        f"{int(row['編號'])}. {row['賽事']} / {row['選手姓名']} / {row['報名單位']}": int(row["編號"])
+        for _, row in view.iterrows()
+    }
+    selected_label = st.selectbox("選擇要修改的報名資料", list(row_options.keys()), key="admin-registration-edit-select")
+    selected_id = row_options[selected_label]
+    selected_row = view[view["編號"] == selected_id].iloc[0]
+
+    with st.form(f"admin-registration-edit-form-{selected_id}"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            team_name = st.text_input("報名單位", value=str(selected_row["報名單位"]))
+            athlete_name = st.text_input("選手姓名", value=str(selected_row["選手姓名"]))
+            gender_options = ["男", "女", "其他"]
+            current_gender = str(selected_row["性別"])
+            gender = st.selectbox(
+                "性別",
+                gender_options,
+                index=gender_options.index(current_gender) if current_gender in gender_options else 0,
+            )
+        with col2:
+            birth_date = st.text_input("出生年月日", value=str(selected_row["出生年月日"]))
+            category = st.text_input("項目", value=str(selected_row["項目"]))
+            group_name = st.text_input("組別", value=str(selected_row["組別"]))
+        with col3:
+            rank_level = st.text_input("級別", value=str(selected_row["級別"]))
+            item_amount = st.number_input("金額", min_value=0, step=100, value=int(selected_row["金額"] or 0))
+            phone = st.text_input("電話", value=str(selected_row["電話"]))
+
+        col4, col5, col6 = st.columns(3)
+        with col4:
+            leader_name = st.text_input("領隊", value=str(selected_row["領隊"]))
+        with col5:
+            coach_name = st.text_input("教練", value=str(selected_row["教練"]))
+        with col6:
+            manager_name = st.text_input("管理", value=str(selected_row["管理"]))
+
+        status_options = ["未繳費", "待核對", "已確認"]
+        current_status = str(selected_row["繳費狀態"])
+        payment_status = st.selectbox(
+            "繳費狀態",
+            status_options,
+            index=status_options.index(current_status) if current_status in status_options else 0,
+        )
+        pay_five_digits = st.text_input("匯款後五碼", value=str(selected_row["匯款後五碼"]), max_chars=5)
+        note = st.text_area("備註", value=str(selected_row["備註"]))
+        submitted = st.form_submit_button("儲存修改", use_container_width=True)
+
+    if submitted:
+        if not athlete_name.strip() or not team_name.strip():
+            st.error("報名單位與選手姓名不可空白。")
+            return
+        updated = update_registration_record(
+            selected_id,
+            {
+                "team_name": team_name.strip(),
+                "athlete_name": athlete_name.strip(),
+                "gender": gender,
+                "birth_date": birth_date.strip(),
+                "category": category.strip(),
+                "group_name": group_name.strip(),
+                "rank_level": rank_level.strip(),
+                "item_amount": int(item_amount),
+                "leader_name": leader_name.strip(),
+                "coach_name": coach_name.strip(),
+                "manager_name": manager_name.strip(),
+                "phone": phone.strip(),
+                "note": note.strip(),
+                "payment_status": payment_status,
+                "pay_five_digits": pay_five_digits.strip(),
+            },
+        )
+        if updated:
+            st.success("報名資料已更新。")
+            st.rerun()
+        st.error("你沒有權限修改此筆資料。")
+
+    if st.button("刪除此筆報名", key=f"admin-delete-registration-{selected_id}", use_container_width=True):
+        if can_manage_registration_event(str(selected_row["賽事"])):
+            delete_registration(selected_id, include_all=True)
+            st.success("報名資料已刪除。")
+            st.rerun()
+        st.error("你沒有權限刪除此筆資料。")
+
+
+def render_permission_admin() -> None:
+    st.subheader("權限管理")
     events = get_events()
-    event_filter = st.selectbox("請選擇要查看的賽事", ["全部賽事"] + [event["name"] for event in events])
-    view = df if event_filter == "全部賽事" or df.empty else df[df["賽事"] == event_filter]
+    event_options = {event["name"]: event["id"] for event in events}
+    profiles = get_user_profiles()
+    profile_emails = [profile.account_email for profile in profiles]
+
+    selected_existing = st.selectbox(
+        "選擇既有帳號",
+        ["新增帳號"] + profile_emails,
+        key="permission-existing-account",
+    )
+    if selected_existing == "新增帳號":
+        target_email = st.text_input("帳號 Email", key="permission-new-email").strip().lower()
+    else:
+        st.text_input("帳號 Email", value=selected_existing, disabled=True, key="permission-existing-email")
+        target_email = selected_existing.strip().lower()
+    target_profile = get_user_profile(target_email) if target_email else None
+    current_role_label = role_label(target_profile.role if target_profile else ROLE_REGISTRANT)
+    role_names = list(ROLE_OPTIONS.keys())
+    selected_role_name = st.selectbox(
+        "權限角色",
+        role_names,
+        index=role_names.index(current_role_label) if current_role_label in role_names else role_names.index("報名人"),
+        key="permission-role",
+    )
+    existing_event_names = organizer_event_names(target_email) if target_email else []
+    selected_event_names = st.multiselect(
+        "主辦單位可管理的賽事",
+        list(event_options.keys()),
+        default=[name for name in existing_event_names if name in event_options],
+        disabled=ROLE_OPTIONS[selected_role_name] != ROLE_ORGANIZER,
+        key="permission-events",
+    )
+    if st.button("儲存權限", key="save-permission", use_container_width=True):
+        if not target_email:
+            st.error("請輸入帳號 Email。")
+            return
+        selected_role = ROLE_OPTIONS[selected_role_name]
+        if target_email == current_account() and selected_role != ROLE_SUPER_ADMIN:
+            st.error("不能移除自己目前的最高管理員權限。")
+            return
+        set_user_role(target_email, selected_role)
+        selected_event_ids = [event_options[name] for name in selected_event_names] if selected_role == ROLE_ORGANIZER else []
+        set_event_permissions(target_email, selected_event_ids)
+        st.success("權限已更新。")
+        st.rerun()
+
+    st.markdown("### 目前帳號權限")
+    rows = [
+        {
+            "帳號": profile.account_email,
+            "角色": role_label(profile.role),
+            "授權賽事": "、".join(organizer_event_names(profile.account_email)) or "-",
+        }
+        for profile in profiles
+    ]
+    st.dataframe(pd.DataFrame(rows, columns=["帳號", "角色", "授權賽事"]), use_container_width=True, hide_index=True)
+
+
+def render_admin(df: pd.DataFrame) -> None:
+    st.markdown("<div class='section-title'>管理後台</div>", unsafe_allow_html=True)
+    if not can_access_admin_backend():
+        st.error("此頁僅限最高管理員與主辦單位使用。")
+        return
+
+    all_events = get_events()
+    visible_event_names = admin_visible_event_names()
+    visible_events = all_events if visible_event_names is None else [
+        event for event in all_events if event["name"] in visible_event_names
+    ]
+    if not is_admin() and not visible_events:
+        st.warning("目前尚未被授權管理任何賽事，請聯繫最高管理員設定權限。")
+        return
+
+    all_label = "全部賽事" if is_admin() else "全部授權賽事"
+    event_filter = st.selectbox("請選擇要查看的賽事", [all_label] + [event["name"] for event in visible_events])
+    view = df if event_filter == all_label or df.empty else df[df["賽事"] == event_filter]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("參賽單位總數", view["報名單位"].nunique() if not view.empty else 0)
@@ -2790,26 +3255,31 @@ def render_admin(df: pd.DataFrame) -> None:
     estimated_fee = int(view["金額"].sum()) if not view.empty and "金額" in view else 0
     col3.metric("預估總報名費", f"NT${estimated_fee:,}")
 
-    tab1, tab2, tab3 = st.tabs(["報名總表", "項目統計", "賽事設定"])
-    # 在 render_admin 的 with tab1: 最上方加入
+    tabs = st.tabs(["報名總表", "項目統計", "賽事設定", "權限管理"] if is_admin() else ["報名總表", "項目統計"])
+    tab1, tab2 = tabs[0], tabs[1]
     with tab1:
-        st.markdown("### 🔍 智能查帳審核面板 (待核對款項)")
+        st.markdown("### 待核對款項")
         db = SessionLocal()
         try:
-            pending_list = db.query(Registration).filter(Registration.payment_status == "待核對").all()
+            pending_query = db.query(Registration).filter(Registration.payment_status == "待核對")
+            pending_event_names = None
+            if event_filter != all_label:
+                pending_event_names = [event_filter]
+            elif visible_event_names is not None:
+                pending_event_names = visible_event_names
+            if pending_event_names is not None:
+                pending_query = pending_query.filter(Registration.event_name.in_(pending_event_names))
+            pending_list = pending_query.all()
             if not pending_list:
                 st.success("目前暫無待核對的匯款。")
             else:
-                # 依單位群組顯示
                 pending_df = pd.DataFrame([{
                     "賽事": p.event_name, "單位": p.team_name, "後五碼": p.pay_five_digits, "金額": p.item_amount, "教練": p.coach_name
                 } for p in pending_list])
-                
                 summary_pending = pending_df.groupby(["賽事", "單位", "後五碼"]).agg({"金額":"sum"}).reset_index()
-                
                 for _, row in summary_pending.iterrows():
                     col_info, col_btn = st.columns([4, 1])
-                    col_info.warning(f"🔔 【{row['賽事']}】{row['單位']} | 後五碼: {row['後五碼']} | 應對帳總金額: NT${row['金額']:,}")
+                    col_info.warning(f"【{row['賽事']}】{row['單位']} | 後五碼: {row['後五碼']} | 應對帳總金額: NT${row['金額']:,}")
                     if col_btn.button("確認已到帳", key=f"conf_{row['賽事']}_{row['單位']}"):
                         admin_confirm_payment(row['賽事'], row['單位'])
                         st.success(f"{row['單位']} 已確認收款！")
@@ -2817,7 +3287,6 @@ def render_admin(df: pd.DataFrame) -> None:
         finally:
             db.close()
         st.divider()
-    with tab1:
         st.dataframe(view, use_container_width=True, hide_index=True)
         st.download_button(
             "下載後台總表",
@@ -2827,6 +3296,7 @@ def render_admin(df: pd.DataFrame) -> None:
             use_container_width=True,
             disabled=view.empty,
         )
+        render_admin_registration_editor(view)
     with tab2:
         if view.empty:
             st.info("此賽事目前無報名資料。")
@@ -2837,8 +3307,11 @@ def render_admin(df: pd.DataFrame) -> None:
             left.dataframe(category_summary, use_container_width=True, hide_index=True)
             right.dataframe(team_summary, use_container_width=True, hide_index=True)
             st.bar_chart(category_summary, x="項目", y="人數", color="賽事")
-    with tab3:
-        render_event_admin()
+    if is_admin():
+        with tabs[2]:
+            render_event_admin()
+        with tabs[3]:
+            render_permission_admin()
 
 
 def render_login() -> None:
@@ -2849,35 +3322,38 @@ def render_login() -> None:
             """
             <div class="info-panel">
                 <h3>Google 帳號登入</h3>
-                <p>正式上線時可串接 Google OAuth，讓參賽單位管理自己的報名資料，主辦方則可進入管理後台。</p>
+                <p>登入後會自動綁定 Google Email，報名資料、單位資料與權限都會依此帳號管理。</p>
                 <p class="small-note">LINE 或 Facebook 內建瀏覽器可能會阻擋 Google 登入，建議使用系統瀏覽器開啟。</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
     with col2:
-        account = st.text_input("測試帳號 Email", placeholder="demo@example.com")
-        admin_code = st.text_input("管理員代碼（選填）", type="password")
-        if st.button("使用測試帳號登入", use_container_width=True):
-            if account.strip():
-                role = "admin" if admin_code.strip() == ADMIN_ACCESS_CODE else "coach"
-                ensure_user_account(account.strip(), role)
-                st.session_state["account"] = account.strip()
-                request_page_change("管理後台" if role == "admin" else UNIT_PAGE)
-                st.success(f"已登入：{account.strip()}")
-                st.rerun()
-            else:
-                st.warning("請輸入 Email。")
         if st.session_state.get("account"):
-            st.info(f"目前帳號：{st.session_state['account']}")
+            st.success(f"目前帳號：{st.session_state['account']}")
+            if not is_admin():
+                with st.expander("升級為最高管理員"):
+                    admin_code = st.text_input("最高管理員代碼", type="password", key="promote-admin-code")
+                    if st.button("確認升級", key="promote-admin-button", use_container_width=True):
+                        if admin_code.strip() == ADMIN_ACCESS_CODE:
+                            set_user_role(st.session_state["account"], ROLE_SUPER_ADMIN)
+                            st.success("已升級為最高管理員。")
+                            request_page_change("管理後台")
+                            st.rerun()
+                        else:
+                            st.error("代碼錯誤。")
+            st.button("登出", key="login-page-logout", on_click=logout_current_user, use_container_width=True)
+        else:
+            render_login_box("login_page")
 
 
 def main() -> None:
     inject_styles()
+    sync_authenticated_user()
     apply_pending_page_change()
     page = render_sidebar()
     page = enforce_page_access(page)
-    df = db_to_dataframe(current_account(), include_all=is_admin())
+    df = db_to_dataframe(current_account())
     events = get_events()
 
     if page == "賽事列表":
@@ -2893,7 +3369,13 @@ def main() -> None:
     elif page == ACCOUNT_PAGE:
         render_account_page()
     elif page == "管理後台":
-        render_admin(df)
+        render_admin(
+            db_to_dataframe(
+                current_account(),
+                include_all=True,
+                event_names=admin_visible_event_names(),
+            )
+        )
     elif page == LOGIN_PAGE:
         render_login()
     else:

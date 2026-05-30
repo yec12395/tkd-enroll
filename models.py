@@ -55,6 +55,15 @@ class SiteAsset(Base):
     data_base64 = Column(Text)
 
 
+class EventPermission(Base):
+    __tablename__ = "event_permissions"
+
+    id = Column(Integer, primary_key=True)
+    account_email = Column(String, index=True)
+    event_id = Column(Integer, ForeignKey("competition_events.id"), index=True)
+    permission_role = Column(String, default="organizer")
+
+
 class TeamUnit(Base):
     __tablename__ = "team_units"
 
