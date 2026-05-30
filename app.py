@@ -1557,6 +1557,18 @@ def google_auth_missing_settings() -> list[str]:
     return missing
 
 
+def configured_redirect_uri() -> str:
+    return str(secret_mapping_value(read_secret("auth"), "redirect_uri") or "").strip()
+
+
+def configured_app_url() -> str:
+    redirect_uri = configured_redirect_uri()
+    suffix = "/oauth2callback"
+    if redirect_uri.endswith(suffix):
+        return redirect_uri[:-len(suffix)]
+    return str(os.getenv("PUBLIC_APP_URL") or "").strip().rstrip("/")
+
+
 def google_auth_configured() -> bool:
     return google_auth_provider() is not None and not google_auth_missing_settings()
 
@@ -1589,6 +1601,10 @@ def google_user_value(key: str) -> str:
     info = streamlit_user_info()
     if key in info and info[key]:
         return str(info[key]).strip()
+    if key == "email":
+        for alt_key in ("preferred_username", "upn"):
+            if info.get(alt_key):
+                return str(info[alt_key]).strip()
     user = getattr(st, "user", None)
     try:
         return str(getattr(user, key, "") or user.get(key, "") or "").strip()
@@ -1598,37 +1614,47 @@ def google_user_value(key: str) -> str:
 
 def google_user_is_logged_in() -> bool:
     info = streamlit_user_info()
+    has_identity = bool(info.get("email") or info.get("preferred_username") or info.get("sub"))
     if "is_logged_in" in info:
-        return bool(info["is_logged_in"])
+        value = info["is_logged_in"]
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes"} or has_identity
+        return bool(value) or has_identity
     user = getattr(st, "user", None)
     try:
-        return bool(getattr(user, "is_logged_in", False))
+        return bool(getattr(user, "is_logged_in", False)) or has_identity
     except Exception:
-        return False
+        return has_identity
 
 
 def auth_debug_enabled() -> bool:
     return query_param_value("debug_auth") == "1" or os.getenv("SHOW_AUTH_DEBUG") == "1"
 
 
-def render_auth_debug() -> None:
-    if not auth_debug_enabled():
-        return
-    st.markdown("### Auth Debug")
+def auth_status_payload() -> dict:
     safe_info = {
         key: ("***" if "token" in key.lower() else value)
         for key, value in streamlit_user_info().items()
         if key != "tokens"
     }
-    st.json(
-        {
-            "st_user": safe_info,
-            "google_user_is_logged_in": google_user_is_logged_in(),
-            "google_email": google_user_value("email"),
-            "session_account": st.session_state.get("account"),
-            "auth_source": st.session_state.get("auth_source"),
-        }
-    )
+    return {
+        "st_user": safe_info,
+        "google_user_is_logged_in": google_user_is_logged_in(),
+        "google_email": google_user_value("email"),
+        "session_account": st.session_state.get("account"),
+        "auth_source": st.session_state.get("auth_source"),
+        "auth_missing_settings": google_auth_missing_settings(),
+        "configured_redirect_uri": configured_redirect_uri(),
+        "canonical_app_url": configured_app_url(),
+        "query_page": query_param_value("page"),
+    }
+
+
+def render_auth_debug() -> None:
+    if not auth_debug_enabled():
+        return
+    st.markdown("### Auth Debug")
+    st.json(auth_status_payload())
 
 
 def sync_authenticated_user() -> None:
@@ -2232,6 +2258,8 @@ def render_event_list(events: list[dict], df: pd.DataFrame) -> None:
 
 
 def render_google_login_intro() -> None:
+    app_url = configured_app_url()
+    login_url = f"{app_url}/?page=login" if app_url else ""
     st.markdown(
         """
         <div class="login-panel">
@@ -2245,6 +2273,23 @@ def render_google_login_intro() -> None:
         """,
         unsafe_allow_html=True,
     )
+    if app_url:
+        st.info("如果 Google 登入後又顯示尚未登入，請直接用原始 Streamlit 網址登入，避免外層網站或內建瀏覽器擋住登入 cookie。")
+        st.link_button("用原始 Streamlit 網址開啟登入", login_url, use_container_width=True)
+
+
+def render_login_status_check() -> None:
+    with st.expander("登入狀態檢查", expanded=auth_debug_enabled()):
+        st.caption("這裡只顯示安全診斷資訊，不會顯示 client secret 或 token。")
+        st.json(auth_status_payload())
+        st.markdown(
+            """
+            判讀方式：
+            - `google_user_is_logged_in` 是 `false`：Google 回來後 Streamlit 沒有保存登入 cookie，請改用原始 Streamlit 網址、無痕視窗或系統瀏覽器。
+            - `google_user_is_logged_in` 是 `true` 但 `google_email` 空白：Google OAuth scope 沒有回傳 email。
+            - `configured_redirect_uri` 必須和 Google Cloud「已授權的重新導向 URI」完全一致。
+            """
+        )
 
 
 def render_login_box(prefix: str = "login") -> None:
@@ -3589,9 +3634,11 @@ def render_login() -> None:
                     else:
                         st.error("代碼錯誤。")
         st.button("登出", key="login-page-logout", on_click=logout_current_user, use_container_width=True)
+        render_login_status_check()
         return
 
     render_login_box("login_page")
+    render_login_status_check()
 
 
 def main() -> None:
