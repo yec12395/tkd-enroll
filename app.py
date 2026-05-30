@@ -2236,8 +2236,6 @@ def render_login_box(prefix: str = "login") -> None:
 [auth]
 redirect_uri = "https://tkd.doubleshot.tech/app/oauth2callback"
 cookie_secret = "replace-with-a-long-random-string"
-
-[auth.google]
 client_id = "your-google-client-id.apps.googleusercontent.com"
 client_secret = "your-google-client-secret"
 server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
